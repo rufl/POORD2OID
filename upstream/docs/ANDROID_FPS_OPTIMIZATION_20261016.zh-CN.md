@@ -1,5 +1,7 @@
 # Android 帧率优化：2026-10-16
 
+**小米 11T System Vulkan / ADPF follow-up:** the saved log showed `APerformanceHint_getManager()` succeeded, but initial session creation failed for TID 27177; subsequent cycles were permanently skipped. `performance_hint.c` now retries on valid frame cycles with exponential backoff (60, 120, 240 … capped at 3600 cycles), while keeping the same present-thread binding and normal scheduling fallback. This only recovers if the failure is transient; no FPS improvement is claimed before device verification. Packaged as v0.6.66.
+
 **新USB手机横屏适配已装机：** V2505A/Adreno840首次资源部署完成；Activity原已横屏，修复Vulkan错误预旋转声明，实机current0x2→selectedIDENTITY0x1，3168x1440底图与HUD方向一致。控件按可用高度缩放并靠安全屏幕边缘。build exit0/11.388秒，已install-r且root看过截图，用户自行建角进入区域2野外，截图59.0FPS、120帧短窗0>33ms，横屏与触控正确；尚非长期全场景60，勿混同平板采样。证据 `<LOCAL_WORK>/research/android-phone-landscape-20261016/handoff.zh-CN.md`。以下为历史。
 
 **最新创建诊断已实机定位移动尖峰：** build11.512秒/exit0。静止营地59.99839FPS，1800帧0次>33ms、最长28.372ms。真实摇杆移动frame7270的129.182ms慢帧中，graphics_pipeline创建占109.447ms；frame6996的88.856ms中创建70.538ms。移动窗口均59.45FPS但仍有卡顿，不能称全程稳定60。已开始设计/实施持久管线缓存，尚未构建，不声称能避免首次新状态编译。证据 `<LOCAL_WORK>/research/android-create-timing-20261016/handoff.zh-CN.md`。用户要求的新USB设备安装由new_device_install并行处理。以下为历史。

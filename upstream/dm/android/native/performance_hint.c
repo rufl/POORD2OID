@@ -27,6 +27,8 @@ static pthread_once_t load_once=PTHREAD_ONCE_INIT;
 static pthread_mutex_t hint_lock=PTHREAD_MUTEX_INITIALIZER;
 static APerformanceHintSession *session;
 static int available,attempted,reported;
+static uint64_t retry_after_cycle;
+static uint32_t retry_delay_cycles=60;
 static int32_t bound_tid;
 static int64_t target_ns=16666667;
 static int paused,cycle_pending,cycle_invalid,cycle_index;
@@ -91,16 +93,21 @@ void dm_android_performance_wsi_calls(uint64_t duration_ns) {
 }
 
 static void session_create_locked(int32_t tid) {
-    if(!attempted){
-        attempted=1;
-        APerformanceHintManager *manager=api.manager();
-        if(manager)session=api.create(manager,&tid,1,target_ns);
-        if(session){
-            bound_tid=tid;
-            int64_t preferred=api.preferred_rate?api.preferred_rate(manager):-1;
-            fprintf(stderr,"[dm] [adpf] session created tid=%d target_ns=%lld preferred_ns=%lld\n",bound_tid,(long long)target_ns,(long long)preferred);
-            __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session tid=%d target=%.3f ms preferred_report=%.3f ms",bound_tid,target_ns/1e6,preferred<0?-1:preferred/1e6);
-        }else {fprintf(stderr,"[dm] [adpf] session creation failed manager=%d tid=%d\n",manager!=NULL,tid);__android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session not supported/available; continue with normal scheduling");}
+    if(attempted||cycles<retry_after_cycle)return;
+    APerformanceHintManager *manager=api.manager();
+    if(manager)session=api.create(manager,&tid,1,target_ns);
+    if(session){
+        attempted=1;retry_after_cycle=0;retry_delay_cycles=60;
+        bound_tid=tid;
+        int64_t preferred=api.preferred_rate?api.preferred_rate(manager):-1;
+        fprintf(stderr,"[dm] [adpf] session created tid=%d target_ns=%lld preferred_ns=%lld\n",bound_tid,(long long)target_ns,(long long)preferred);
+        __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session tid=%d target=%.3f ms preferred_report=%.3f ms",bound_tid,target_ns/1e6,preferred<0?-1:preferred/1e6);
+    }else {
+        uint32_t delay=retry_delay_cycles;
+        retry_after_cycle=cycles+delay;
+        retry_delay_cycles=delay<1800?delay*2:3600;
+        fprintf(stderr,"[dm] [adpf] session creation failed manager=%d tid=%d retry_after_cycle=%llu\n",manager!=NULL,tid,(unsigned long long)retry_after_cycle);
+        __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session creation failed; retry in %u valid frame cycles",delay);
     }
 }
 void dm_android_performance_set_target(int64_t target_duration_ns) {
@@ -150,7 +157,7 @@ void dm_android_performance_frame_end(const void *window,int index) {
 void dm_android_performance_close(void) {
     pthread_mutex_lock(&hint_lock);
     if(session){api.close(session);session=NULL;}
-    bound_tid=0;attempted=0;reported=0;
+    bound_tid=0;attempted=0;reported=0;retry_after_cycle=0;retry_delay_cycles=60;
     paused=1;cycle_clear();accepted=skipped=cycles=work_total=wsi_total=0;
     pthread_mutex_unlock(&hint_lock);
 }
