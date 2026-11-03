@@ -96,6 +96,7 @@ static void *frame_rate_java_request(void *argument) {
 void dm_android_window_frame_period(double period) {
     game_app *s=application;if(!s||!isfinite(period)||period<0)return;
     double rate=period>0?1.0/period:0;if(!isfinite(rate)||rate>FLT_MAX)return;
+    if(period>0&&period<=1.0)dm_android_performance_set_target((int64_t)(period*1000000000.0+0.5));
     float requested=(float)rate;if(period>0&&requested<=0)return;
     pthread_once(&frame_rate_once,frame_rate_api_load);
     // 诊断开关：$DM_TEMP/no_frame_rate 存在时不向系统请求帧率。
@@ -300,10 +301,11 @@ static void *boot(void *argument) {
     dm_android_launch_settings launch;char launch_error[512];
     if(!dm_android_launch_settings_apply(path,&launch,launch_error,sizeof launch_error))die("[android] launch settings: %s",launch_error);
     LOG("[android] launch configuration present=%d operation_mode=%d input_receipts=%d 分辨率=%dx%d present_hz=%d",launch.present,launch.operation_mode,launch.input_receipts,launch.resolution_width,launch.resolution_height,launch.present_hz);
-    // 帧率目标：配置里写了才改（未写就是原来的 60 Hz）。0 = 跟随屏幕最高刷新率。
-    // The frame rate target: only applied when the configuration sets it (unset keeps the original 60 Hz). 0 = follow the
-    // screen's maximum refresh rate.
-    if(launch.present_hz>=0){void dm_present_hz_set(int);dm_present_hz_set(launch.present_hz==0?-1:launch.present_hz);}
+    // 默认在 120 Hz 面板上将呈现上限设为 60 Hz；用户显式选 0 时仍跟随最高刷新率。
+    // Cap presents at 60 Hz by default, including on 120 Hz panels; an explicit 0 still follows the display maximum.
+    void dm_present_hz_set(int);
+    int present_target=launch.present_hz<0?60:launch.present_hz==0?-1:launch.present_hz;
+    dm_present_hz_set(present_target);
     // 设置生效后立刻记一次环境，确认 DM_GAME_RES 真的传下去了（否则只会在游戏那边看到"未设"）。
     // Immediately record the environment after the settings apply, to confirm DM_GAME_RES really got through;
     // otherwise the only symptom is "unset" on the game side.
@@ -488,6 +490,10 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
 // takes effect on the next present.
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setPresentHz(JNIEnv *env,jclass klass,jint hz) {
     (void)env;(void)klass;void dm_present_hz_set(int);dm_present_hz_set((int)hz);
+}
+extern void mtl_buffer_cache_trim(void);
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_trimGpuBuffers(JNIEnv *env,jclass klass) {
+    (void)env;(void)klass;mtl_buffer_cache_trim();
 }
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setMenuOpen(JNIEnv *env,jclass klass,jboolean open) {
     (void)env;(void)klass;atomic_store(&menu_open,open?1:0);
@@ -760,6 +766,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         {"setOverlayEnabled","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setOverlayEnabled},
         {"setQualityPreset","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setQualityPreset},
         {"setPresentHz","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setPresentHz},
+        {"trimGpuBuffers","()V",(void*)Java_org_d2r_android_port_D2RActivity_trimGpuBuffers},
         {"setMenuOpen","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setMenuOpen},
         {"setSkipSaveOnExit","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit}
     };

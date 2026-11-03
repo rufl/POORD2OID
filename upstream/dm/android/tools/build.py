@@ -3,6 +3,8 @@
 Build a standalone ARM64 NativeActivity APK and runtime tests without Gradle.
 """
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -50,6 +52,47 @@ GAME_ACTIVITY_BLOCK = (
 
 def run(args, **kwargs):
     subprocess.run(list(map(str, args)), check=True, **kwargs)
+
+
+PANVK_ARCHIVE_SHA256 = "6e9129a3b9db5204c315df2ba5836fb88dea063686a0d11426de992e9e2409c5"
+PANVK_LIBRARY_SHA256 = "e6e92930cc70f3fae6d7157c5de71598f27b4b1fdfce89504f6c8b6aeda12801"
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def package_panvk(archive_path, assets, licenses):
+    if not archive_path.is_file():
+        sys.exit("Missing PanVK package: " + str(archive_path))
+    if sha256_file(archive_path) != PANVK_ARCHIVE_SHA256:
+        sys.exit("PanVK package checksum mismatch: " + str(archive_path))
+    panvk_assets = assets / "panvk"
+    panvk_assets.mkdir(parents=True, exist_ok=True)
+    temporary = panvk_assets / "libvulkan_panfrost.so.pending"
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            metadata = json.loads(archive.read("meta.json"))
+            if metadata.get("name") != "PanVK-FristOneRR-V.3.7.0" or metadata.get("libraryName") != "libvulkan_panfrost.so":
+                sys.exit("Unexpected PanVK package metadata")
+            with archive.open("libvulkan_panfrost.so") as source, temporary.open("wb") as target:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    target.write(chunk)
+            if sha256_file(temporary) != PANVK_LIBRARY_SHA256:
+                sys.exit("PanVK driver checksum mismatch")
+            (panvk_assets / "driver.sha256").write_text(PANVK_LIBRARY_SHA256 + "\n", encoding="ascii")
+            (panvk_assets / "LICENSE-Mesa.txt").write_bytes(archive.read("LICENSE-Mesa.txt"))
+    except (OSError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+        temporary.unlink(missing_ok=True)
+        sys.exit("Invalid PanVK package: " + str(error))
+    temporary.replace(panvk_assets / "libvulkan_panfrost.so")
+    shutil.copyfile(panvk_assets / "LICENSE-Mesa.txt", licenses / "PanVK-FristOneRR-v3.7.0.txt")
+    print("PanVK FristOneRR v3.7.0: verified and bundled", flush=True)
+
 
 
 def build_counter_timestamp(build):
@@ -102,12 +145,18 @@ def main():
     parser.add_argument("--game-source", type=Path, help="Local rewritten Android game modules (includes game code in APK)")
     parser.add_argument("--game-run", action="store_true", help="Run the real game host with NVN/Vulkan instead of the diagnostic frontend")
     parser.add_argument("--shader-cache", type=Path, default=Path.home() / "dm-work/build/android/shaders/spirv")
+    parser.add_argument("--keystore", type=Path, default=TOOLS / "debug.keystore",
+                        help="Signing keystore; keep the same key to install updates over an existing app")
     parser.add_argument("--version", default="dev",
                         help="写进 APK 的版本：发布用 tag 名（v0.3），分支构建用 main-<短提交>；默认 dev")
     parser.add_argument("--turnip", type=Path, default=ROOT / "prebuilt/turnip/vulkan.purple.so",
                         help="随 APK 分发的 Turnip 驱动；默认用仓库里的 dm/android/prebuilt/turnip/")
     parser.add_argument("--no-turnip", action="store_true",
-                        help="不出内置驱动（只出通用包，启动界面里那一项会自己隐藏）")
+                        help="不出内置 Turnip 驱动")
+    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/PanVK-FristOneRR-V.3.7.0.zip",
+                        help="官方 FristOneRR PanVK 包；默认要求通过仓库固定SHA256验证")
+    parser.add_argument("--no-panvk", action="store_true",
+                        help="明确构建不含 PanVK 的 APK")
     args = parser.parse_args()
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
     if args.game_run and not args.game_source:
@@ -180,20 +229,33 @@ def main():
         shutil.copyfile(artwork, assets / artwork.name)
     for override in sorted((ROOT / "local").glob("launcher-background.*")):
         shutil.copyfile(override, assets / override.name)
-    # 内置 Turnip 驱动随 APK 分发（Mesa 的 MIT 许可，构建者见 prebuilt/turnip/meta.json）：启动界面把它复制到
-    # 应用内部目录再按 gpu-driver.conf 选择，游戏本身不改一行代码；玩家可在启动界面切回系统驱动。
-    # 没有这个文件时照常出通用包，启动界面里那一项自动隐藏 —— 缺驱动不是构建失败。
-    # The built-in Turnip driver ships inside the APK (Mesa's MIT licence; builder recorded in
-    # prebuilt/turnip/meta.json): the launcher copies it into the app's internal storage and selects it through
-    # gpu-driver.conf, so the game code is untouched and the player can switch back to the system driver. Without
-    # the file a generic package is produced as before and that launcher row hides itself -- a missing driver is
-    # not a build failure.
-    if args.no_turnip: print("Turnip driver: excluded (--no-turnip)", flush=True)
+    # Turnip ships for Qualcomm KGSL; FristOneRR PanVK ships for Mali kbase. The launcher exposes each only when its
+    # matching device node exists and copies it into internal storage before writing gpu-driver.conf. Sidecar
+    # SHA-256 markers invalidate stale same-size copies after an APK update. Turnip can be omitted explicitly;
+    # PanVK's default package is checksum-pinned, and --no-panvk is the explicit opt-out.
+    # Turnip 面向 Qualcomm KGSL，FristOneRR PanVK 面向 Mali kbase。启动器只在匹配设备节点存在时显示对应选项，
+    # 并在写 gpu-driver.conf 前复制到应用内部目录。sidecar SHA-256 标记可在 APK 更新后淘汰同尺寸旧库。
+    # Turnip 可显式省略；PanVK 默认固定校验打包，--no-panvk 才是明确退出。
+    if args.no_turnip:
+        shutil.rmtree(assets / "turnip", ignore_errors=True)
+        print("Turnip driver: excluded (--no-turnip)", flush=True)
     elif args.turnip.is_file():
-        (assets / "turnip").mkdir(exist_ok=True)
-        shutil.copyfile(args.turnip, assets / "turnip/vulkan.purple.so")
+        turnip_assets = assets / "turnip"
+        turnip_assets.mkdir(exist_ok=True)
+        shutil.copyfile(args.turnip, turnip_assets / "vulkan.purple.so")
+        (turnip_assets / "driver.sha256").write_text(sha256_file(args.turnip) + "\n", encoding="ascii")
         print("Turnip driver: bundled from " + str(args.turnip) + " (%.1f MB)" % (args.turnip.stat().st_size / 1048576), flush=True)
-    else: print("Turnip driver: not present at " + str(args.turnip) + "; generic package only", flush=True)
+    else:
+        shutil.rmtree(assets / "turnip", ignore_errors=True)
+        print("Turnip driver: not present at " + str(args.turnip) + "; generic package only", flush=True)
+
+    if args.no_panvk:
+        shutil.rmtree(assets / "panvk", ignore_errors=True)
+        (licenses / "PanVK-FristOneRR-v3.7.0.txt").unlink(missing_ok=True)
+        print("PanVK driver: excluded (--no-panvk)", flush=True)
+    else:
+        package_panvk(args.panvk, assets, licenses)
+
     # 诊断GLSL缓存独立于游戏的离线Maxwell fullshader缓存，不覆盖游戏资源。
     # Keep diagnostic GLSL shaders separate from the game's offline Maxwell fullshader cache.
     shutil.copytree(build / "gpu-test-shaders", assets / "gpu-test-shaders", dirs_exist_ok=True)
@@ -253,7 +315,7 @@ def main():
                 z.write(args.game_source / ("libdmguest_" + name + ".so"), "lib/arm64-v8a/libdmguest_" + name + ".so")
     aligned = build / "aligned.apk"
     run([TOOLS / "build-tools/zipalign", "-f", "-P", "16", "4", unsigned, aligned])
-    keystore = TOOLS / "debug.keystore"
+    keystore = args.keystore
     if not keystore.exists():
         run([TOOLS / "jdk/bin/keytool", "-genkeypair", "-keystore", keystore, "-storepass", "android", "-keypass", "android",
              "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",

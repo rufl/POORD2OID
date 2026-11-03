@@ -18,10 +18,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <errno.h>
+#include <stdint.h>
+#include <sys/xattr.h>
+static int g_xattr_unsupported;
+static ssize_t fake_getxattr(const char *path, const char *name, void *value, size_t size,
+                             uint32_t position, int options) {
+    if (g_xattr_unsupported) { errno = EOPNOTSUPP; return -1; }
+    return getxattr(path, name, value, size, position, options);
+}
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
+#define getxattr fake_getxattr
 #define pwrite fake_pwrite
 #include "../hle_fs.c"
 #undef pwrite
+#undef getxattr
 ssize_t pwrite(int, const void *, size_t, off_t);
 
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; }   // 日志时间戳与读路径的桩（写路径不用） | stubs for log timestamps and the read path (not used by the write path)
@@ -85,6 +96,9 @@ int main(void) {
     snprintf(fn, sizeof fn, "%s/same", rdata); put(fn, "base"); snprintf(fn, sizeof fn, "%s/same", odata); put(fn, "overlay"); snprintf(fn, sizeof fn, "%s/base", rdata); put(fn, "only-base"); snprintf(fn, sizeof fn, "%s/over", odata); put(fn, "only-overlay");
     setenv("DM_ROMFS", rom, 1); setenv("DM_ROMFS_OVERLAY", overlay, 1); CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK, "挂载 RomFS 两层 overlay");
     CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "overlay"), "overlay 文件优先"); CHECK(read_fs("rom:/data/base", got, sizeof got) && !strcmp(got, "only-base"), "overlay 缺失时回退基底");
+    g_xattr_unsupported = 1;
+    CHECK(read_fs("rom:/data/same", got, sizeof got) && !strcmp(got, "overlay"), "ROMFS lookup works when external storage rejects xattrs");
+    g_xattr_unsupported = 0;
     uint64_t rh; CHECK(h_fs_OpenFile(&rh, "rom:/data/same", MODE_WRITE) == RES_FAIL, "两层挂载均拒绝写入");
     {   // 覆盖层里找文件（dm_overlay_file）：两层用冒号连着（老机型 = 包内覆盖层 + 补充包），逐层找、前面的优先；把整串当一个目录就哪个也找不到 | Find a file in the overlay (dm_overlay_file): two layers joined by a colon (old devices = in-bundle overlay + Legacy Device Pack), searched layer by layer with earlier ones taking priority; treating the whole string as one directory finds nothing
         char l2[1100], two[2300], want[1300]; snprintf(l2, sizeof l2, "%s/pack", root); mkdir(l2, 0755); snprintf(two, sizeof two, "%s:%s", overlay, l2); setenv("DM_ROMFS_OVERLAY", two, 1);
@@ -146,10 +160,11 @@ int main(void) {
     snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "new"), "工作目录 a 回到已提交版 new");
     snprintf(p, sizeof p, "%s/b", work); CHECK(same(p, "7"), "工作目录 b = 已提交的 7");
 
-    // 语言开关改写设置文件（settings_lang_apply）：期望值按规则手算——只在「与开关不符」时把 Language / VoiceLanguage 改成 0（英文）或 8（简中），别的键和别的语言不动
-    // Language switch rewriting the settings file (settings_lang_apply): expected values computed by hand from the rule -- only when it "does not match the switch" are Language / VoiceLanguage changed to 0 (English) or 8 (Simplified Chinese); other keys and other languages are untouched
-    { extern int g_t_lang; char sd[1200], sf[1300], gotj[512]; snprintf(sd, sizeof sd, "%s/langt", root); mkdir(sd, 0755); snprintf(sf, sizeof sf, "%s/Settings", sd); mkdir(sf, 0755); snprintf(sf, sizeof sf, "%s/Settings/Settings.json", sd);
-      #define LANGCASE(dm, in, want, what) do { g_t_lang = (dm); put(sf, (in)); settings_lang_apply(sd); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "语言开关：%s", (what)); } while (0)
+    // 平台语言策略：通用开关按现有规则改写；Android 固定英文模式也必须覆盖原有简中，并保留无关键。
+    // Platform language policy: the normal switch follows its existing rules; Android's fixed-English mode must override stored Chinese and preserve unrelated keys.
+    { char sd[1200], sf[1300], gotj[512]; snprintf(sd, sizeof sd, "%s/langt", root); mkdir(sd, 0755); snprintf(sf, sizeof sf, "%s/Settings", sd); mkdir(sf, 0755); snprintf(sf, sizeof sf, "%s/Settings/Settings.json", sd);
+      #define LANGCASE(mode, in, want, what) do { put(sf, (in)); settings_lang_apply_mode(sd, (mode), 0); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "语言开关：%s", (what)); } while (0)
+      #define LANGFORCE(in, want, what) do { put(sf, (in)); settings_lang_apply_mode(sd, 1, 1); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0; CHECK(!strcmp(gotj, (want)), "Android 英文：%s", (what)); } while (0)
       LANGCASE(-1, "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "没点过应用：一个字不动");
       LANGCASE(1, "{ \"A\": 1, \"Language\": 8, \"VoiceLanguage\": 8, \"B\": 2 }", "{ \"A\": 1, \"Language\": 0, \"VoiceLanguage\": 0, \"B\": 2 }", "开关 = 英文、文件是简中：文字和语音都改成 0，别的键不动");
       LANGCASE(0, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 8, \"VoiceLanguage\": 8 }", "开关 = 中文、文件是英文：都改成 8");
@@ -157,7 +172,13 @@ int main(void) {
       LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文件已是英文：不动");
       LANGCASE(1, "{ \"Language\": 0, \"VoiceLanguage\": 8 }", "{ \"Language\": 0, \"VoiceLanguage\": 0 }", "开关 = 英文、文字已英文但语音还是中文：语音跟上");
       LANGCASE(1, "{ \"Language\": 12 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "开关 = 英文、两位数的语言号且没有语音键：改写并补上语音键");
-      g_t_lang = -1; }
+      LANGFORCE("{ \"Keep\": 7, \"Language\": 8, \"VoiceLanguage\": 8, \"Other\": \"unchanged\" }", "{ \"Keep\": 7, \"Language\": 0, \"VoiceLanguage\": 0, \"Other\": \"unchanged\" }", "旧中文设置被强制成英文，其他设置原样保留");
+      LANGFORCE("{ \"Language\": 0 }", "{\n    \"VoiceLanguage\": 0, \"Language\": 0 }", "语言已英文但缺语音键，仍补成英文");
+      { unlink(sf); settings_lang_apply_mode(sd, 1, 1); FILE *lf = fopen(sf, "rb"); size_t ln_ = lf ? fread(gotj, 1, sizeof gotj - 1, lf) : 0; if (lf) fclose(lf); gotj[ln_] = 0;
+        CHECK(!strcmp(gotj, "{\n    \"Language\": 0,\n    \"VoiceLanguage\": 0\n}\n"), "Android 首次启动：无设置文件时创建英文文字与语音设置"); }
+      #undef LANGFORCE
+      #undef LANGCASE
+      }
 
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
     printf("== %d 项，失败 %d ==\n", checks, fails);

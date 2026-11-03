@@ -66,6 +66,12 @@ adb -s "$ANDROID_SERIAL" shell am start -n org.d2r.android.port/.LauncherActivit
 ```
 
 RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用数据。首次无存档会进入建角界面。存档位于应用私有 `files/save/`，不要用其他设备存档覆盖现有角色。驱动与启动配置见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)和[启动设置](ANDROID_LAUNCH_SETTINGS.zh-CN.md)。
+若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
+
+启动器保留三种后端：系统 Vulkan（可手动选择的回退）、适用于 Mali kbase（`/dev/mali0`）的 FristOneRR PanVK v3.7.0，以及适用于 Qualcomm KGSL（`/dev/kgsl-3d0`）的内置 Turnip。硬件不匹配的选项会隐藏；Xiaomi 11T 应显示系统 Vulkan 与实验性 PanVK，Turnip 仍随包保留但不适用于 Mali。PanVK 明确标为非一致性实验驱动；设备级探针不等于已验证 D2R 可进入游戏。详见[GPU 驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+
+Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
+Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。
 
 ## 自动流水线（GitHub Actions）
 
@@ -95,6 +101,8 @@ git tag v0.2 && git push origin v0.2
 包的入口是 `org.d2r.android.port.LauncherActivity`（Java），游戏本体是它启动的第二个页面 `D2RActivity`（不导出）。清单由 `build.py` 从仓库清单改写而来：替换必须正好命中一个 NativeActivity 块，否则直接报错退出；探针构建没有 dex，所以仍用纯原生清单、不出现 Java 页面。
 
 界面目前可用的设置是调试浮层开关与画面档位（掌机1280×720 / 主机1600×900），点“启动游戏”时写进应用私有 `files/temp/launch-settings.conf`，由 native 严格解析（键白名单、失败即中止启动，且不接受任意路径）。游戏文件与密钥两项**尚未接入**，只如实显示“未设置”。
+游戏内返回菜单提供 30 / 60 / 跟随屏幕最高刷新率三档；默认呈现上限为 60 Hz，已保存的 30 Hz 或“跟随”设置仍优先，高刷新率设备可手动选“跟随”。这是节拍请求，不代表游戏实测 FPS；场景负载与温度仍会限制性能。Vulkan 启动日志记录设备/驱动、扩展、subgroup 与关键格式能力；每 60 帧记录 BC CPU 解排布/解码耗时。Android 内存压力回调只释放已完成、空闲的上传缓冲区。
+
 
 启动画面背景图随源码发布：`dm/android/artwork/launcher-background.*`，构建时打进 APK 的 `assets/`，所以新电脑 clone 后能重建出同样的 APK。想换自己的图，把同名文件放进 `dm/android/local/`（该目录已 gitignore）即可覆盖，不必改源码。素材明显小于屏幕时代码会先缩小再放大，让放大本身把它柔化成氛围底图；换更大的图就自动变清晰。
 

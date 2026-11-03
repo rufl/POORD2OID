@@ -25,12 +25,10 @@ static const int k_def[NK] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1 };   // 
 static _Atomic int g_val[NK];        // 已生效：1 开 / 0 关 | In effect: 1 on / 0 off
 static _Atomic int g_pend[NK];       // 选项页上改了还没应用：-1 = 没改 | Changed on the options page but not applied yet: -1 = not changed
 static _Atomic int g_loaded;         // 0 没读盘 / 1 已读 | 0 not read from disk / 1 read
-// lang_en（语言开关，自定义页第一行）：勾上 = 英文界面 + 英文语音。它不是功能开关，生效方式不同——下次启动挂存档时由 hle_fs.c 按它改写原版设置文件的
-// Language / VoiceLanguage（游戏运行中自己会把内存里的语言写回设置文件，所以只能在游戏读设置之前改；见 dm_custom_lang_explicit）。
-// 文件里没有这个键（老玩家、还没点过应用）= 不动原版设置，勾选框按当前实际语言显示；「默认」不改它（按一下默认把语言切了不合适）
-// lang_en (language switch, first row of the Custom page): checked = English UI + English voice. It is not a feature switch and takes effect differently -- at the next launch, when the save is mounted, hle_fs.c rewrites the original game's settings file's
-// Language / VoiceLanguage according to it (while running, the game itself writes the in-memory language back to the settings file, so it can only be changed before the game reads its settings; see dm_custom_lang_explicit).
-// Key absent from the file (an existing player who has not yet tapped Apply) = the original settings are left alone, and the checkbox shows the actual current language; 「默认」(Default) does not change it (switching the language at one press of Default would be inappropriate)
+// lang_en is an optional language switch on non-Android platforms. Android always uses English and ignores any saved lang_en value.
+// On other platforms it rewrites the game's Language / VoiceLanguage before the next startup; without an explicit choice, the original setting remains.
+// lang_en 在非 Android 平台是可选语言开关。Android 始终使用英文并忽略存档里的 lang_en。
+// 其他平台只在下次启动前按明确选择改写游戏的 Language / VoiceLanguage；没有明确选择时沿用原设置。
 static _Atomic int g_lang_explicit = -1;   // 文件里写着的 lang_en：-1 没写 / 0 / 1 | lang_en as written in the file: -1 not written / 0 / 1
 // merc_pot（佣兵自动喂药）原先缺省关、现在缺省开。旧文件每次存盘都把全部键写一遍，里面的 merc_pot=0 分不出「没动过」还是「自己关的」，
 // 所以另记一行 merc_pot_v2：只有在缺省改成开之后玩家自己在页上改过这一项才写。读盘时有 merc_pot_v2 以它为准；没有 = 没在新缺省下动过 → 开
@@ -59,7 +57,11 @@ static void load_once(void) {
     int lang = -1, merc = -1;
     while (f && fgets(ln, sizeof ln, f)) { char *eq = strchr(ln, '='); if (!eq) continue; *eq = 0; int i = key_index(ln); if (i >= 0) v[i] = eq[1] != '0'; if (i == 0) lang = v[0]; if (!strcmp(ln, "merc_pot_v2")) merc = eq[1] != '0'; }
     if (f) fclose(f);
+#ifdef __ANDROID__
+    lang = 1; v[0] = 1;   // Android APK language is fixed to English; ignore persisted lang_en
+#else
     if (lang < 0) v[0] = !dm_lang_zh();   // 没写过：按当前实际语言显示 | Never written: display according to the current actual language
+#endif
     atomic_store(&g_lang_explicit, lang);
     v[K_MERC] = merc < 0 ? k_def[K_MERC] : merc; atomic_store(&g_merc_explicit, merc);
     for (int i = 0; i < NK; i++) { atomic_store(&g_val[i], v[i]); atomic_store(&g_pend[i], -1); }
@@ -112,6 +114,13 @@ static void set_toggle(uint64_t w, int on) {
     static const int32_t fr[2][4] = { { 0, 1, 3, 2 }, { 4, 5, 6, -1 } };
     *(uint8_t *)(w + 0xa88) = on != 0; memcpy((void *)(w + 0x6e8), fr[on != 0], sizeof fr[0]); *(int32_t *)(w + 0x610) = fr[on != 0][0];
 }
+#ifdef __ANDROID__
+static void hide_widget_x(uint64_t w) {
+    if (!w) return;
+    int32_t *r = (int32_t *)(w + 0x70); if (r[0] == 99999) return;
+    r[0] = 99999; ((void (*)(uint64_t))*(uint64_t *)(*(uint64_t *)w + 0x10))(w);
+}
+#endif
 void dm_custom_ui_pump(unsigned long long root) {
     if (!root || !main_base()) return;
     static uint64_t seen[NK];
@@ -120,7 +129,14 @@ void dm_custom_ui_pump(unsigned long long root) {
         if (was) for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1);
         memset(seen, 0, sizeof seen); return; }
     load_once(); if (atomic_exchange(&g_repaint, 0)) memset(seen, 0, sizeof seen);
+#ifdef __ANDROID__
+    atomic_store(&g_lang_explicit, 1); atomic_store(&g_val[0], 1); atomic_store(&g_pend[0], -1);
+    static uint64_t lang_panel, zh_text, zh_toggle;
+    if (lang_panel != sp) { lang_panel = sp; zh_text = find_w(sp, "TouchCustomLangZh_Text", 0); zh_toggle = find_w(sp, "TouchCustom_lang_zh", 0); }
+    hide_widget_x(zh_text); hide_widget_x(zh_toggle);   // Keep only the fixed English choice visible
+#else
     if (atomic_load(&g_lang_explicit) < 0) atomic_store(&g_val[0], !dm_lang_zh());   // 语言那一格没点过应用：生效值 = 此刻实际在跑的语言（读盘时游戏还没设语言，那时取到的不准） | Apply never tapped for the language cell: effective value = the language actually running right now (when read from disk the game has not set the language yet, so the value fetched then is not accurate)
+#endif
     // 手柄模式：原版选项页的焦点只认表格里它自己的行，够不着我们的勾选框——十字键上下选行（原版手柄选中框 TouchCustomSel 框住这一行）、A 翻勾选（下面照「玩家点了」处理），其余键照旧归原版
     // Controller mode: the original options page's focus only recognizes its own rows in the table and cannot reach our checkboxes. D-pad up/down selects a row
     // (the original controller selection frame TouchCustomSel frames that row), A toggles the checkbox (handled below as "the player tapped it"), and all other
@@ -133,9 +149,14 @@ void dm_custom_ui_pump(unsigned long long root) {
           if (ev & DM_BTN_DOWN) sel = sel + 1 < NK ? sel + 1 : sel; else if (ev & DM_BTN_UP) sel = sel > 0 ? sel - 1 : 0;
           snprintf(nm, sizeof nm, "TouchCustom_%s", k_keys[sel]); cw = find_w(sp, nm, 0); snprintf(nm, sizeof nm, "TouchCustom_%s_Text", k_keys[sel]); tw = find_w(sp, nm, 0);
           if ((ev & DM_BTN_A) && cw && seen[sel] == cw) {
-              if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]); atomic_store(&g_pend[0], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, "TouchCustom_lang_zh", 0); if (z) set_toggle(z, sh); }   // 语言行是单选的两项：两个框当场摆好（只改待定值的话，下面读框状态会把没跟上的框当成玩家点的） | The language row is a single choice between two items: both boxes are set on the spot (if only the pending value were changed, the code below that reads the box states would take the box that has not caught up as a player tap)
+#ifdef __ANDROID__
+              if (sel == 0) set_toggle(cw, 1); else set_toggle(cw, !TOGGLED(cw));
+#else
+              if (sel == 0) { int p0 = atomic_load(&g_pend[0]), sh = p0 >= 0 ? p0 : atomic_load(&g_val[0]); atomic_store(&g_pend[0], !sh); set_toggle(cw, !sh); { uint64_t z = find_w(sp, "TouchCustom_lang_zh", 0); if (z) set_toggle(z, sh); }   // 语言行是单选的两项：两个框当场摆好（只改待定值的话，下面读框状态会把没跟上的框当成玩家点的） | The language row is a single choice between two items: both boxes are set on the spot (if only the pending value were changed, the code below that reads the box state would take the box that has not caught up as a player tap)
                   LOG("自定义设置：语言 → %s（手柄 A 在两项间切换；点「应用」生效）", !sh ? "English" : "中文"); }
-              else set_toggle(cw, !TOGGLED(cw)); } }
+              else set_toggle(cw, !TOGGLED(cw));
+#endif
+          } }
       if (dm) { int32_t *r = (int32_t *)(dm + 0x70), want[4] = { 99999, 0, r[2], r[3] };   /* 不用时只把 x 挪出屏：它在滚动区里，y 放远了会撑大可滚范围 | when unused only x is moved off screen: it is inside the scroll area, and a far-away y would enlarge the scrollable range */
           if (dm_padmode_current() && tw && cw) { int32_t *t = (int32_t *)(tw + 0x70), *c = (int32_t *)(cw + 0x70); int top = t[1] < c[1] ? t[1] : c[1], bot = t[1] + t[3] > c[1] + c[3] ? t[1] + t[3] : c[1] + c[3];   // 框住整行：文字与勾选框两者的上下沿取并，再各放 10 单位（原先只按文字框的高度算，文字框比字矮，框成了横穿文字中线的一条） | Frame the whole row: take the union of the top and bottom edges of the text and the checkbox, then pad 10 units on each side (previously computed from the text box height only; the text box is shorter than the glyphs, so the frame became a strip cutting across the middle of the text)
               want[0] = t[0] - 30; want[1] = top - 10; want[2] = c[0] + c[2] + 30 - want[0]; want[3] = bot - top + 20;
@@ -153,6 +174,9 @@ void dm_custom_ui_pump(unsigned long long root) {
         uint64_t w = find_w(sp, nm, 0); if (!w || !*(uint8_t *)(w + 0x50)) continue;
         int pd0 = atomic_load(&g_pend[i]), want = pd0 >= 0 ? pd0 : atomic_load(&g_val[i]);
         uint64_t z = i == 0 ? find_w(sp, "TouchCustom_lang_zh", 0) : 0;   // 语言行：并排的「中文」「English」两个勾选框，单选——存的仍是 lang_en 一个键，「中文」那格是它的反面 | Language row: two checkboxes side by side, 「中文」 and "English", single choice -- what is stored is still the one key lang_en, and the 「中文」 box is its opposite
+#ifdef __ANDROID__
+        if (i == 0) { seen[i] = w; set_toggle(w, 1); if (z) set_toggle(z, 0); continue; }
+#endif
         if (seen[i] != w) { seen[i] = w; set_toggle(w, want); if (z) set_toggle(z, !want); continue; }   // 页刚出现（布局里一律是没勾）：先摆成该显示的值，这一帧不当玩家点了 | The page has just appeared (in the layout everything is unchecked): first set it to the value it should show, and do not treat this frame as a player tap
         int on = TOGGLED(w), pd = atomic_load(&g_pend[i]), shown = pd >= 0 ? pd : atomic_load(&g_val[i]);
         if (i == 0 && z) {   // 点没选中的那一项 = 选它；点已选中的那一项不变（摆回勾上） | Tapping the item that is not selected = select it; tapping the one already selected changes nothing (it is put back to checked)

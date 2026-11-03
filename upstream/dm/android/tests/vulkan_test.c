@@ -33,6 +33,22 @@ static void packet(unsigned op, const void *payload, size_t n) {
     op_hdr h = {op, (sizeof h + n + 7) & ~(size_t)7}; assert(used + h.size <= sizeof packets);
     memcpy(packets + used, &h, sizeof h); if (n) memcpy(packets + used + 8, payload, n); used += h.size;
 }
+static void scissor_clip_reference_test(void) {
+    VkRect2D r=graphics_scissor_clip((p_scissor){0,0,0,0},64,32);
+    assert(r.offset.x==0&&r.offset.y==0&&r.extent.width==64&&r.extent.height==32);
+    r=graphics_scissor_clip((p_scissor){-4,-3,10,10},64,32);
+    assert(r.offset.x==0&&r.offset.y==0&&r.extent.width==6&&r.extent.height==7);
+    r=graphics_scissor_clip((p_scissor){60,28,10,10},64,32);
+    assert(r.offset.x==60&&r.offset.y==28&&r.extent.width==4&&r.extent.height==4);
+    r=graphics_scissor_clip((p_scissor){65,0,4,32},64,32);
+    assert(r.offset.x==64&&r.offset.y==0&&r.extent.width==0&&r.extent.height==32);
+    r=graphics_scissor_clip((p_scissor){0,33,64,4},64,32);
+    assert(r.offset.x==0&&r.offset.y==32&&r.extent.width==64&&r.extent.height==0);
+    r=graphics_scissor_clip((p_scissor){4,5,-1,-1},64,32);
+    assert(r.offset.x==4&&r.offset.y==5&&r.extent.width==60&&r.extent.height==27);
+    r=graphics_scissor_clip((p_scissor){INT32_MAX,INT32_MIN,INT32_MAX,INT32_MAX},64,32);
+    assert(r.offset.x==64&&r.offset.y==0&&r.extent.width==0&&r.extent.height==0);
+}
 static void *waiter(void *p) { assert(mtl_wait(*(uint64_t *)p, 1000000000)); return NULL; }
 // 原有像素断言读取提交结果，显式等待；异步回归直接使用真实 commit。
 // Existing pixel assertions consume submission results and explicitly wait; async regressions use the real commit.
@@ -61,6 +77,7 @@ static uint64_t test_sync_commit(void){uint64_t ticket=async_raw_commit();assert
 #include "known_copy_snapshot_test.inc"
 #include "typed_clear_test.inc"
 int main(void) {
+    scissor_clip_reference_test();
     assert(timestamp_delta(250,5,8)==11);
     assert(timestamp_delta(UINT64_MAX-2,3,64)==6);
     assert(timestamp_delta(12,15,0)==0);
@@ -94,7 +111,13 @@ int main(void) {
         uint8_t controls[3][0x880]={{1},{2},{3}};prog_t graphics={.nstage=2,.sd={{.control=controls[0]},{.control=controls[1]}}},compute={.nstage=1,.sd={{.control=controls[2]}}};
         mtl_set_tex_pool_n(4);mtl_reg_tex(1,&texture,NULL);mtl_reg_tex(2,&target,NULL);
         memset(&state,0,sizeof state);state.program=&graphics;state.rt.n=1;state.rt.color[0]=&target;state.mask.mask=UINT32_MAX;state.polygon.mode=2;state.textures[1][0]=1;
-        p_draw triangle={.prim=NVN_DRAW_PRIMITIVE_TRIANGLES,.count=3};mtl_sub_begin();p_clear_color clear={.mask=15};clear_color(&clear);draw_graphics(&triangle,NULL);mtl_sub_commit();
+        p_draw triangle={.prim=NVN_DRAW_PRIMITIVE_TRIANGLES,.count=3};
+        if(getenv("DM_VK_SCISSOR_TEST_ONLY")){
+            uint64_t offscreen_samples=UINT64_MAX;state.scissor=(p_scissor){17,0,8,16};
+            mtl_sub_begin();post_new(4);draw_graphics(&triangle,NULL);mtl_sub_counter((uintptr_t)&offscreen_samples,1);mtl_sub_commit();
+            assert(offscreen_samples==0);puts("Vulkan scissor clipping: off-target draw emits zero samples PASS");return 0;
+        }
+        mtl_sub_begin();p_clear_color clear={.mask=15};clear_color(&clear);draw_graphics(&triangle,NULL);mtl_sub_commit();
         assert(samples_passed==256);
         uint8_t pixels[16*16*4];NVNcopyRegion region={0,0,0,16,16,1};mtl_read_texels(&target,0,0,&region,pixels,16*4,0);
         for(unsigned i=0;i<256;i++)assert(!memcmp(pixels+i*4,linear,4));

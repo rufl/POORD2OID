@@ -609,3 +609,19 @@ python dm/android/tools/build.py --game-source ~/dm-work/build/android/game --in
 - **存档备份能完整恢复角色**：走启动界面「导入存档」选备份包（`d2r-save-restore.zip`，来自 `~/dm-work/backup/`），界面显示"已导入 17 个文件"；把恢复后的 `files/save` 与备份**逐条比 MD5，17/17 逐字节一致**（含 8 个名字带空格的 `Starter - X.fltr`）；进游戏后角色列表出现 `AndroidProbe / 1级野蛮人`，可直接进入游戏。结论：跨清空、重装、升级都成立。
 - **README 配图**：两边 README 新增「界面 / Screens」一节，三张实机截图放 `docs/images/`（2400 宽 JPEG，共 1.3 MB）：启动界面（无帧率浮层，图注写明它是普通应用界面）、英雄选择（角色来自导入的存档）、**Act I 营地 60.0 FPS / 帧时 16.7 ms**（CPU 7.9 / GPU 10.9 ms）。游戏画面都带调试浮层（帧率/帧时/CPU/GPU/功耗/绘制）。**注意**：这三张图含游戏自身美术，是本仓库唯一越过"不含任何游戏内容"这条线的地方（作为移植文档截图，不是分发的游戏资源）。
 - 本轮踩到的两个测量坑，记下来避免重犯：① `run-as ... md5sum $(find ...)` 会被**空格**拆成多个参数，`md5sum` 把 `-` 当标准输入，于是吐出 8 行"空文件"的哈希 —— 要用 `find -exec md5sum {} +`；② 别删一个**正在被游戏写着的** `game.log`（进程仍持有旧 inode，新文件一直为空，监控会永远看不到输出）。
+## 小米 11T 高刷新率节拍（2026-11-03）
+
+设备日志确认 GPU 为 Mali-G77 MC9，屏幕最高 120 Hz，启动配置没有保存 `present_hz`。修复进局 scissor 崩溃之前，第 1020 帧测得 59.57 FPS、GPU 批次跨度 3.68 ms/帧、fence wait 4.10 ms/帧；第 1054 帧在进局时崩溃。这只是进局前的样本，不是营地或战斗基准。
+
+现在 Android 在用户未保存帧率档时跟随屏幕最高刷新率；显式保存的 30/60 Hz 设置仍生效，游戏内菜单缺省标签与之匹配。使用当前安装签名构建并安装了 APK 0.6.62（`versionCode=662`）；`adb install -r` 成功，已导入游戏数据目录仍存在。下载地址：`http://100.86.44.23:8811/D2R-Xiaomi-11T-English-0.6.62.apk`；SHA-256：`611db7954adfa9ae38948793c80c2b4937c21ce81014c25c272e338ed0a6af23`。
+
+尚无升级后的局内 FPS 实测。新设置在 120 Hz 屏上请求每秒 120 次呈现，但进局后的持续 FPS 和 UI / 计时行为仍未验证；不能声称实测达到 120 FPS。
+
+## Mali-G77 能力与内存诊断
+
+Android Vulkan 后端现在记录物理设备厂商/设备 ID、驱动与 API 版本、Mali 家族/G77 配置、设备及驱动 UUID 前缀、枚举到的全部设备扩展、subgroup 大小/阶段/操作、storage-image 限制，以及 BC、ASTC、ETC2、RGBA 和深度格式的 optimal/linear 能力位。Mali 检测同时使用 ARM Vulkan 厂商 ID 与设备名，并供既有 LocalSize workaround 使用。
+
+BC 回退上传会累计 CPU 解排布/解码墙钟耗时及压缩/解码后字节数，每呈现 60 帧输出一次。ADPF 目标工作时长跟随实际呈现周期；系统有更新 API 时更新现有会话，旧系统安全地重建会话。默认帧率上限改为每秒 60 次呈现；显式 30 Hz 和显式“跟随屏幕”设置保持不变。Android 内存压力回调仅释放 64 MiB 缓存中已完成且空闲的 staging 缓冲，不碰活动缓冲或客体快照。
+
+构建/安装核验（2026-11-03）：`build.py --game-run --version v0.6.63` 构建成功，`versionCode=663`。首次构建使用的默认签名被 Android 拒绝；未卸载、未清除数据。改用匹配的 `apk/d2r-debug.keystore` 重建后，`adb install -r` 从 0.6.62 原位升级成功。安装后核对版本为 663，且 `files/d2r-package` 与 `files/save` 仍存在。APK 已通过 Tailnet 分享：`http://100.86.44.23:8811/D2R-Xiaomi-11T-English-0.6.63.apk`（HTTP 200；SHA-256 `d496bf85360152ce95dd2f6cd91d480b79c5e63b4ef8b2a3851c3170e125d574`）。
+`LauncherActivity` 启动请求已接受，但唤醒手机后仍停留在锁屏，应用在锁屏后保持停止状态。因此尚未进入游戏，也未实测升级后的 Vulkan/ADPF/BC 诊断；没有新的 FPS 或温度数据，不宣称 Mali 性能提升。

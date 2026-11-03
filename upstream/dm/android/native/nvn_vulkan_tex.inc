@@ -18,6 +18,7 @@ static sampler_descriptor *sampler_descriptors;
 static int texture_capacity, sampler_capacity;
 static pthread_mutex_t descriptor_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t texture_uploads, render_passes, draw_count;
+static _Atomic uint64_t bc_decode_jobs,bc_decode_input_bytes,bc_decode_output_bytes,bc_decode_wall_ns;
 static uint64_t image_barriers;
 static uint64_t image_read_only_transitions;   // 转到只读布局的次数（诊断用）
 static VkImageView image_view_get(image_entry *e,VkImageViewType type,VkImageSubresourceRange range) {
@@ -238,6 +239,7 @@ static void image_upload(image_entry *e) {
         size_t upload_rows = decode_bc ? h : rows;
         post_op *p=post_new(3);p->source=buffer_create((uint64_t)upload_pitch*upload_rows*d);
         if(decode_bc){
+            uint64_t decode_started=dm_android_clock_ns(CLOCK_MONOTONIC);
             // 压缩块先解排布到临时区（按块行），再逐行解码进暂存区。
             // 3D 纹理的 d 层块必须一起放下：下面按 z 逐层取 blocks+z*pitch*rows，
             // 只分配一层就是堆越界 —— 这会把驱动内部结构写坏，之后建任何管线都可能在驱动里 SIGSEGV。
@@ -259,6 +261,10 @@ static void image_upload(image_entry *e) {
                     die("Vulkan BC decode failed format=%#x %ux%u",t->d.format,w,h);
             }
             free(blocks);
+            uint64_t decode_elapsed=dm_android_clock_ns(CLOCK_MONOTONIC)-decode_started;
+            atomic_fetch_add(&bc_decode_jobs,1);atomic_fetch_add(&bc_decode_input_bytes,bytes);
+            atomic_fetch_add(&bc_decode_output_bytes,(uint64_t)upload_pitch*upload_rows*d);
+            atomic_fetch_add(&bc_decode_wall_ns,decode_elapsed);
         }else if(t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)){
             const uint8_t *src=storage+nvn_tex_level_offset(&t->d,level)+layer*t->L.layer_size;size_t stride=t->d.stride?t->d.stride:pitch;
             for(unsigned z=0;z<d;z++)for(unsigned y=0;y<rows;y++)memcpy((uint8_t*)p->source.mapped+(z*rows+y)*pitch,src+(z*rows+y)*stride,pitch);

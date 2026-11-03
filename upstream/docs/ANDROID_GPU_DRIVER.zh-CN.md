@@ -56,7 +56,7 @@ T30 必须在**本应用内部**可执行文件目录，hooks 必须位于自身
 
 adrenotools 内部可能加载失败后返回非NULL系统loader，因此必须再查真实 VkPhysicalDeviceDriverProperties：要求 VK_DRIVER_ID_MESA_TURNIP，日志打印 actual driverID/name/info/API/subgroup。deviceName含Adreno或handle非NULL都不能算Turnip成功。[adrenotools API](https://github.com/eden-emulator/libadrenotools/blob/8ba23b42d7/include/adrenotools/driver.h)，[内部回退](https://github.com/eden-emulator/libadrenotools/blob/8ba23b42d7/src/hook/hook_impl.cpp)
 
-真实游戏还要求 shader cache 的 host-subgroup-size.txt 有效并匹配真正选择的shader执行大小。未指定大小时使用真实物理缺省；指定64时必须实际支持、启用扩展并为每个VS/FS/CS管线声明required64，物理缺省128仍单独保留。未知或不一致响亮失败，不能假定64或只改数字。按实际32/64/128重建 fullshader，保留 Maxwell guest warp32适配。独立 GLSL fixture 没有离线Maxwell cache，仍做真实driverID检查和全部 GPU 断言；这不是绕过某项GPU gate。属性组件可额外传入实际游戏cache目录以单独检查profile，但完整GLSL fixture须使用其专属缓存。
+真实游戏仍要求 shader cache 的 `host-subgroup-size.txt` 是 16、32、64 或 128，并与实际 shader 执行 subgroup 相同。PanVK 在 Xiaomi 11T 上报告物理 subgroup16；为该驱动准备数据包时应把 profile 设置为16（`build_shaders.py --host-subgroup-size 16` / package `--subgroup 16`），不可把64 profile直接冒充16。未指定驱动 subgroup 时使用真实物理缺省；指定64等档位时必须实际支持、启用扩展并为每个VS/FS/CS管线声明该值。独立 GLSL fixture 没有离线Maxwell cache，仍做真实driverID检查和GPU断言；这不是绕过游戏profile校验。
 
 ## 连接恢复后的 root 验证顺序
 
@@ -236,8 +236,16 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 **光照的实际载体**（由真机探针抓出，非推测）：游戏把光照算进一张 **32×8×32 的 RGBA16F 三维贴图**（计算着色器以存储图像写入，片元着色器每帧采样约 1882 次，采样器是**线性过滤**）。可见范围内正好约 32 个格子 ≈ 实测的 106 屏幕像素方块 —— 方块尺寸与这张贴图的格子完全对上。同一份着色器与数据在 Turnip 上正常，所以问题在驱动对这张三维存储图像的处理，不在移植的读数、上传或过滤。
 
-**随包分发**：驱动放在 `dm/android/prebuilt/turnip/`（`vulkan.purple.so` + 上游 `meta.json`），构建时由 `build.py --turnip`（默认路径即仓库内那份）打进 `assets/turnip/`；`--no-turnip` 出不含驱动的通用包，启动界面里那一项会自动隐藏。来源与许可见 README 的「依赖与来源」。
+**Turnip 随包分发**：驱动放在 `dm/android/prebuilt/turnip/`（`vulkan.purple.so` + 上游 `meta.json`），默认由 `build.py --turnip` 打进 APK；`--no-turnip` 会移除它，启动器自动隐藏该选项。Turnip 仅面向带 KGSL 的 Qualcomm 设备。
 
-**启动界面切换**：新增「驱动：系统驱动 / 内置 Turnip」一行。选择记在启动界面自己的 `launcher-state.conf`（`launch-settings.conf` 由 native 严格白名单解析，塞不进新键）。点「启动游戏」时：选内置驱动就把 `assets/turnip/vulkan.purple.so` 复制到应用内部 `files/temp/driver/`，再写 `files/temp/gpu-driver.conf`（`directory` / `library=vulkan.purple.so` / `require_custom=0` / `subgroup_size=<数据包里的档位值>`）；选系统驱动就把该配置删掉。**子组尺寸必须照抄数据包的 `shaders/host-subgroup-size.txt`（本机为 64）** —— T30 物理默认是 128，而游戏的着色器按 64 构建，端口会用实际选中的尺寸逐项校验这张档位表，不一致直接拒绝启动而不是悄悄画错。`require_custom=0` 是故意的：驱动万一加载失败，端口退回系统驱动并在日志写明 `requested=Turnip selected=system`，不会让游戏起不来。
+**Turnip 启动界面切换**：选择保存在启动器自己的 `launcher-state.conf`（`launch-settings.conf` 由 native 严格白名单解析，不能塞新键）。KGSL 设备选择 Turnip 后，启动器把 `assets/turnip/vulkan.purple.so` 复制到应用内部 `files/temp/driver-turnip/`，写入 `files/temp/gpu-driver.conf`（`backend=turnip` / `library=vulkan.purple.so` / `require_custom=1` / `subgroup_size=<数据包档位值>`）；选择系统驱动则删除该配置。**子组尺寸必须匹配数据包的 `shaders/host-subgroup-size.txt`**，native 会对照实际物理能力校验；不匹配就拒绝启动，不能静默画错。选择自定义驱动时显式 strict，加载或 subgroup/profile 检查失败不会偷偷切换；`system` 是玩家可选择的回退。
 
 真机验证（2026-10-18）：界面切换 → 点启动 → `[vulkan-loader] requested=Turnip selected=Turnip identity verified`（`PurpleVK 26.3.0-devel`、`shader host subgroup=64 matches`）；切回系统驱动 → 配置被删除 → `driver configuration not found` → `requested=system selected=system`。
+
+## 三种 Vulkan 后端（System / PanVK / Turnip）
+
+启动器保留三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 FristOneRR PanVK v3.7.0，仅在存在 `/dev/mali0` 的 Mali kbase 设备提供；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 的 KGSL 设备提供。因此 Xiaomi 11T（Mali-G77 MC9）上应能选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
+
+PanVK 包来自 [FristOneRR-Panvk-Driver v3.7.0](https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0)，构建时固定校验 ZIP 与 `.so` 的 SHA-256，并把 Mesa 许可放入 APK。启动器把驱动复制到应用内部可执行目录；资产摘要变化时重新复制，避免升级 APK 后继续用旧的同尺寸库。native 端用 `vk_icdNegotiateLoaderICDInterfaceVersion` / `vk_icdGetInstanceProcAddr` 加载 PanVK，并要求最终 `VkPhysicalDeviceDriverProperties.driverID` 确认为 `VK_DRIVER_ID_MESA_PANVK`。PanVK 和 Turnip 均以 `require_custom=1` 严格启动：加载、身份或游戏 shader subgroup profile 校验失败时明确报错，不会暗中切回系统；选择 `system` 才是显式回退。
+
+2026-11-03 构建并安装后的 App UID fixture：系统驱动（ID 9）与 PanVK（ID 20）均通过 instance、physical-device、device、queue 与 `vkDeviceWaitIdle` 检查；PanVK 实际报告 Mali-G77 MC9、API 1.3、subgroup 16。PanVK 的 subgroup16 游戏 profile 检查通过；已导入数据包中的 profile 也是16；profile64 按预期因与物理 subgroup16 不匹配而拒绝。PanVK 完整 Vulkan 回归组件尚未通过：在 `tests/vulkan_test.c:52` 的 1 秒 `mtl_wait` 断言中 abort。系统驱动回归组件也未全通过，在之后的 `uniform_arena_reference_test` 断言中 abort。因此只确认两个 loader/device-init 路径；**没有验证 Android surface/swapchain present 或真实 D2R 进入实战**。上游把 PanVK 标为 non-conformant，仍属实验选项，不承诺兼容性或性能。构建可用 `--no-panvk` / `--no-turnip` 显式排除对应包；默认 APK 打包二者。

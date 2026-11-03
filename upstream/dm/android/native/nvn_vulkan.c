@@ -289,6 +289,66 @@ void mtl_screen_attach(struct ANativeWindow *window) {
 }
 #endif
 
+static _Atomic int gpu_mali_family=-1;
+static int gpu_is_mali_properties(const VkPhysicalDeviceProperties *properties) {
+    return properties->vendorID==0x13b5||strstr(properties->deviceName,"Mali")!=NULL;
+}
+static void gpu_report_format(VkFormat format,const char *name) {
+    VkFormatProperties properties;
+    vkGetPhysicalDeviceFormatProperties(physical,format,&properties);
+    VkFormatFeatureFlags f=properties.optimalTilingFeatures;
+    LOG("[vulkan-format] name=%s format=%d linear=%#x optimal=%#x sampled=%u storage=%u color=%u depth=%u transfer_src=%u transfer_dst=%u",
+        name,format,properties.linearTilingFeatures,f,
+        !!(f&VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT),!!(f&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT),
+        !!(f&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT),!!(f&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT),
+        !!(f&VK_FORMAT_FEATURE_TRANSFER_SRC_BIT),!!(f&VK_FORMAT_FEATURE_TRANSFER_DST_BIT));
+}
+static void gpu_report_device_extensions(void) {
+    uint32_t count=0;
+    VkResult result=vkEnumerateDeviceExtensionProperties(physical,NULL,&count,NULL);
+    if(result!=VK_SUCCESS||count>4096){LOG("[vulkan-extensions] enumeration_failed=%d count=%u",result,count);return;}
+    VkExtensionProperties *extensions=count?calloc(count,sizeof *extensions):NULL;
+    if(count&&!extensions){LOG("[vulkan-extensions] allocation_failed count=%u",count);return;}
+    uint32_t actual=count;result=vkEnumerateDeviceExtensionProperties(physical,NULL,&actual,extensions);
+    if(result==VK_SUCCESS)for(uint32_t i=0;i<actual;i++)
+        LOG("[vulkan-extension] %s specVersion=%u",extensions[i].extensionName,extensions[i].specVersion);
+    else LOG("[vulkan-extensions] enumeration_failed=%d count=%u",result,actual);
+    free(extensions);
+}
+static void gpu_report_capabilities(const VkPhysicalDeviceProperties *properties,
+                                    const VkPhysicalDeviceIDProperties *identity,
+                                    const VkPhysicalDeviceSubgroupProperties *subgroup,
+                                    const VkPhysicalDeviceFeatures *features) {
+    int mali=gpu_is_mali_properties(properties);
+    atomic_store_explicit(&gpu_mali_family,mali,memory_order_release);
+    const char *profile=mali&&strstr(properties->deviceName,"Mali-G77")?"mali-g77":
+                        mali?"mali":"generic-vulkan";
+    LOG("[vulkan-device] profile=%s vendor_id=0x%04x device_id=0x%04x driver_version=0x%08x api=%u.%u.%u name=%s",
+        profile,properties->vendorID,properties->deviceID,properties->driverVersion,
+        VK_VERSION_MAJOR(properties->apiVersion),VK_VERSION_MINOR(properties->apiVersion),
+        VK_VERSION_PATCH(properties->apiVersion),properties->deviceName);
+    LOG("[vulkan-identity] device_uuid=%02x%02x%02x%02x driver_uuid=%02x%02x%02x%02x",
+        identity->deviceUUID[0],identity->deviceUUID[1],identity->deviceUUID[2],identity->deviceUUID[3],
+        identity->driverUUID[0],identity->driverUUID[1],identity->driverUUID[2],identity->driverUUID[3]);
+    LOG("[vulkan-subgroup] size=%u stages=%#x operations=%#x quad_all=%u storage_image_read=%u storage_image_write=%u max_storage_images=%u/%u",
+        subgroup->subgroupSize,subgroup->supportedStages,subgroup->supportedOperations,
+        subgroup->quadOperationsInAllStages,features->shaderStorageImageReadWithoutFormat,
+        features->shaderStorageImageWriteWithoutFormat,properties->limits.maxPerStageDescriptorStorageImages,
+        properties->limits.maxDescriptorSetStorageImages);
+    gpu_report_device_extensions();
+    gpu_report_format(VK_FORMAT_BC1_RGBA_UNORM_BLOCK,"bc1-rgba");
+    gpu_report_format(VK_FORMAT_BC3_UNORM_BLOCK,"bc3");
+    gpu_report_format(VK_FORMAT_BC5_UNORM_BLOCK,"bc5");
+    gpu_report_format(VK_FORMAT_BC7_UNORM_BLOCK,"bc7");
+    gpu_report_format(VK_FORMAT_ASTC_4x4_UNORM_BLOCK,"astc-4x4");
+    gpu_report_format(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,"etc2-rgba8");
+    gpu_report_format(VK_FORMAT_R8G8B8A8_UNORM,"rgba8");
+    gpu_report_format(VK_FORMAT_R16G16B16A16_SFLOAT,"rgba16f");
+    gpu_report_format(VK_FORMAT_D16_UNORM,"depth16");
+    gpu_report_format(VK_FORMAT_D24_UNORM_S8_UINT,"depth24-stencil8");
+    gpu_report_format(VK_FORMAT_D32_SFLOAT,"depth32");
+}
+
 static void initialize(void) {
     // 与原 NVN 后端使用相同默认状态；显式指令随后覆盖，不能改写合法深度范围。
     // Match the original NVN defaults; explicit commands override them without rewriting legal depth ranges.
@@ -365,7 +425,8 @@ driver_retry:;
     }
 #endif
     VkPhysicalDeviceProperties properties; VkPhysicalDeviceFeatures features;
-    VkPhysicalDeviceSubgroupProperties subgroup={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+    VkPhysicalDeviceIDProperties identity={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceSubgroupProperties subgroup={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,.pNext=&identity};
     VkPhysicalDeviceProperties2 properties2={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,.pNext=&subgroup};
     vkGetPhysicalDeviceProperties2(physical,&properties2);properties=properties2.properties;gpu_limits=properties.limits;gpu_subgroup_size=subgroup.subgroupSize;
 #ifdef __ANDROID__
@@ -377,7 +438,7 @@ driver_retry:;
     vkGetPhysicalDeviceMemoryProperties(physical, &memory_properties);
     for(uint32_t i=0;i<memory_properties.memoryTypeCount;i++)LOG("[vulkan] memory type %u flags=%#x heap=%u",i,memory_properties.memoryTypes[i].propertyFlags,memory_properties.memoryTypes[i].heapIndex);
     LOG("Android NVN Vulkan: %s API %u.%u BC=%u ASTC=%u", properties.deviceName, VK_VERSION_MAJOR(properties.apiVersion), VK_VERSION_MINOR(properties.apiVersion), features.textureCompressionBC, features.textureCompressionASTC_LDR);
-    LOG("[vulkan] subgroup size=%u stages=%#x operations=%#x quad_all=%u",subgroup.subgroupSize,subgroup.supportedStages,subgroup.supportedOperations,subgroup.quadOperationsInAllStages);
+    gpu_report_capabilities(&properties,&identity,&subgroup,&features);
     float priority = 1;
     VkDeviceQueueCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = family, .queueCount = 1, .pQueuePriorities = &priority};
     VkPhysicalDeviceFeatures enable = {.textureCompressionBC = features.textureCompressionBC, .textureCompressionASTC_LDR = features.textureCompressionASTC_LDR, .independentBlend = features.independentBlend, .shaderImageGatherExtended = features.shaderImageGatherExtended, .fragmentStoresAndAtomics = features.fragmentStoresAndAtomics, .vertexPipelineStoresAndAtomics = features.vertexPipelineStoresAndAtomics, .shaderStorageImageReadWithoutFormat = features.shaderStorageImageReadWithoutFormat, .shaderStorageImageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat, .occlusionQueryPrecise = features.occlusionQueryPrecise};
@@ -425,7 +486,7 @@ driver_retry:;
     // 日志里"看不到"和"没生效"是同一副样子，诊断时无法区分。
     // Confirm the Mali LocalSize fold policy at init time: logging it only when some shader needs it makes
     // "absent from the log" and "not working" indistinguishable during diagnosis.
-    { int mali=strstr(properties.deviceName,"Mali")!=NULL;
+    { int mali=atomic_load_explicit(&gpu_mali_family,memory_order_acquire);
       LOG("[vulkan] LocalSize fold policy: device=%s mali=%d (compute LocalSize Z>1 folds into dispatch Z)",properties.deviceName,mali); }
     // 崩溃时把宿主写回客体的最后若干次打印出来（默认关，见 write_trace_add）。
     // Print the last host->guest writebacks on a crash (off by default, see write_trace_add).
@@ -485,6 +546,24 @@ static void buffer_destroy(vk_buffer *b) {
     }
     pthread_mutex_unlock(&buffer_cache_lock);
     vkUnmapMemory(device, b->memory); vkDestroyBuffer(device, b->buffer, NULL); vkFreeMemory(device, b->memory, NULL);free(b->owner); memset(b, 0, sizeof *b);
+}
+// Cached entries are returned only after their final GPU use completes, so trimming this list never touches in-flight buffers.
+void mtl_buffer_cache_trim(void) {
+    pthread_mutex_lock(&buffer_cache_lock);
+    cached_buffer *entries=buffer_cache;
+    uint64_t released=buffer_cache_bytes;
+    buffer_cache=NULL;buffer_cache_bytes=0;
+    pthread_mutex_unlock(&buffer_cache_lock);
+    uint64_t count=0;
+    while(entries){
+        cached_buffer *next=entries->next;vk_buffer *buffer=&entries->buffer;
+        vkUnmapMemory(device,buffer->memory);
+        vkDestroyBuffer(device,buffer->buffer,NULL);
+        vkFreeMemory(device,buffer->memory,NULL);
+        free(buffer->owner);free(entries);entries=next;count++;
+    }
+    LOG("[vulkan-memory] idle_buffer_cache_trimmed count=%llu released_bytes=%llu",
+        (unsigned long long)count,(unsigned long long)released);
 }
 void mtl_pool_add(const void *mem, uint64_t size) {
     mtl_init(); if (!mem || !size || size > UINTPTR_MAX - (uintptr_t)mem) die("Invalid NVN pool");
@@ -1149,6 +1228,16 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     if(ticket==1||ticket%60==0){uint64_t calls=atomic_load(&present_texture_wait_calls),blocks=atomic_load(&present_texture_wait_blocks),ns=atomic_load(&present_texture_wait_ns);
         if(ticket!=1){unsigned frames=ticket==60?59:60;LOG("[vulkan-texture-reuse-wait] frame=%llu calls/frame=%.2f initially_pending/frame=%.2f wall_ms/frame=%.3f completion=GPU_fence_and_guest_publication",(unsigned long long)ticket,(calls-texture_calls_previous)/(double)frames,(blocks-texture_blocks_previous)/(double)frames,(ns-texture_ns_previous)/(frames*1e6));}
         texture_calls_previous=calls;texture_blocks_previous=blocks;texture_ns_previous=ns;}
+    static uint64_t bc_jobs_previous,bc_input_previous,bc_output_previous,bc_ns_previous;
+    uint64_t bc_jobs=atomic_load(&bc_decode_jobs),bc_input=atomic_load(&bc_decode_input_bytes);
+    uint64_t bc_output=atomic_load(&bc_decode_output_bytes),bc_ns=atomic_load(&bc_decode_wall_ns);
+    if(ticket==1){bc_jobs_previous=bc_jobs;bc_input_previous=bc_input;bc_output_previous=bc_output;bc_ns_previous=bc_ns;}
+    else if(ticket%60==0){unsigned frames=ticket==60?59:60;
+        LOG("[vulkan-bc-decode] frame=%llu jobs/frame=%.2f compressed_MiB/frame=%.3f decoded_MiB/frame=%.3f cpu_deswizzle_decode_ms/frame=%.3f",
+            (unsigned long long)ticket,(bc_jobs-bc_jobs_previous)/(double)frames,
+            (bc_input-bc_input_previous)/(frames*1048576.),(bc_output-bc_output_previous)/(frames*1048576.),
+            (bc_ns-bc_ns_previous)/(frames*1e6));
+        bc_jobs_previous=bc_jobs;bc_input_previous=bc_input;bc_output_previous=bc_output;bc_ns_previous=bc_ns;}
     frame_stability_record(ticket,previous_acquire_ns,acquire_ns,present_ns,present_lock_ns);
     return completion_ticket;
 }

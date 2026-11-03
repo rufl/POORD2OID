@@ -1,7 +1,8 @@
-// 可选Turnip加载和统一Vulkan分发。默认系统驱动；不更改其他应用的配置。
-// Optional Turnip loading and unified Vulkan dispatch. System by default; never change another app's configuration.
+// 可选Turnip / PanVK加载和统一Vulkan分发。默认系统驱动；不更改其他应用的配置。
+// Optional Turnip/PanVK loading and unified Vulkan dispatch. System by default; never change another app's configuration.
 #define _GNU_SOURCE
 #include "gpu_driver.h"
+#include <vulkan/vk_icd.h>
 #include <adrenotools/driver.h>
 #include <ctype.h>
 #include <dlfcn.h>
@@ -53,7 +54,19 @@ static void reset_subgroup_policy(dm_vk_driver *d) {
     d->subgroup_policy_supported=0;d->subgroup_policy_prepared=0;d->subgroup_policy_enabled=0;
     memset(&d->subgroup_features,0,sizeof d->subgroup_features);
 }
+static const char *backend_name(dm_vk_backend backend) {
+    switch (backend) {
+        case DM_VK_BACKEND_TURNIP: return "Turnip";
+        case DM_VK_BACKEND_PANVK: return "PanVK";
+        default: return "system";
+    }
+}
+static VkDriverId expected_driver_id(dm_vk_backend backend) {
+    return backend == DM_VK_BACKEND_PANVK ? VK_DRIVER_ID_MESA_PANVK : VK_DRIVER_ID_MESA_TURNIP;
+}
+
 static int configure(dm_vk_driver *d) {
+    int backend_configured=0;
     // 严格环境标志先解析，配置语法错误也不能悄悄退回系统。
     // Parse strict environment policy first so malformed configuration cannot silently fall back.
     const char *required=getenv("DM_VK_DRIVER_REQUIRE");
@@ -68,7 +81,7 @@ static int configure(dm_vk_driver *d) {
             // A missing configuration would silently drop a strict request back to the system driver, so record the
             // path actually tried and where it came from.
             else driver_log("driver configuration not found: %s (DM_VK_DRIVER_CONFIG=%s DM_TEMP=%s)",config,getenv("DM_VK_DRIVER_CONFIG")?getenv("DM_VK_DRIVER_CONFIG"):"(unset)",temporary?temporary:"(unset)");}
-        else{d->requested_custom=1;char line[2048],first_error[512]={0};int ok=1,driver_keys=0,subgroup_keys=0;
+        else{d->requested_custom=1;d->backend=DM_VK_BACKEND_TURNIP;char line[2048],first_error[512]={0};int ok=1,driver_keys=0,subgroup_keys=0,backend_keys=0;
             // 即使前面的行有错，也读完整policy；后置require_custom=1不能被忽略。
             // Read the complete policy even after an earlier error; do not ignore a later require_custom=1.
             while(fgets(line,sizeof line,file)){
@@ -80,6 +93,7 @@ static int configure(dm_vk_driver *d) {
                     else{*value++=0;key=trim(key);value=trim(value);
                         if(!strcmp(key,"directory")){driver_keys=1;line_ok=copy_text(d,d->driver_directory,sizeof d->driver_directory,value);}
                         else if(!strcmp(key,"library")){driver_keys=1;line_ok=copy_text(d,d->driver_name,sizeof d->driver_name,value);}
+                        else if(!strcmp(key,"backend")){driver_keys=1;backend_configured=1;if(backend_keys++)line_ok=driver_error(d,"duplicate backend configuration");else if(!strcmp(value,"turnip"))d->backend=DM_VK_BACKEND_TURNIP;else if(!strcmp(value,"panvk"))d->backend=DM_VK_BACKEND_PANVK;else line_ok=driver_error(d,"backend must be turnip or panvk");}
                         else if(!strcmp(key,"require_custom")){driver_keys=1;if(strcmp(value,"0")&&strcmp(value,"1"))line_ok=driver_error(d,"require_custom must be 0 or 1");else if(!required)d->require_custom=*value=='1';}
                         else if(!strcmp(key,"subgroup_size")){
                             d->subgroup_policy_required=1;
@@ -97,26 +111,48 @@ static int configure(dm_vk_driver *d) {
         }
     }
     const char *directory=getenv("DM_VK_DRIVER_DIR"),*name=getenv("DM_VK_DRIVER_NAME");
-    if(directory){d->requested_custom=*directory!=0;if(!copy_text(d,d->driver_directory,sizeof d->driver_directory,directory))return 0;}
+    if(directory){d->requested_custom=*directory!=0;if(!copy_text(d,d->driver_directory,sizeof d->driver_directory,directory))return 0;if(*directory&&!backend_configured)d->backend=DM_VK_BACKEND_TURNIP;}
     if(name&&!copy_text(d,d->driver_name,sizeof d->driver_name,name))return 0;
     if(!d->requested_custom){if(d->require_custom)return driver_error(d,"required custom driver directory is missing");return 1;}
     if(!d->driver_directory[0])return driver_error(d,"custom driver directory is missing");
-    if(!d->driver_name[0])strcpy(d->driver_name,"vulkan.purple.so");
+    if(!d->driver_name[0])strcpy(d->driver_name,d->backend==DM_VK_BACKEND_PANVK?"libvulkan_panfrost.so":"vulkan.purple.so");
     if(strchr(d->driver_name,'/')||strchr(d->driver_name,'\\')||!strcmp(d->driver_name,".")||!strcmp(d->driver_name,".."))return driver_error(d,"custom driver library must be a basename");
     char resolved[PATH_MAX];if(!realpath(d->driver_directory,resolved))return driver_error(d,"custom driver directory: %s",strerror(errno));
     if(!strncmp(resolved,"/sdcard",7)||!strncmp(resolved,"/storage",8)||!strncmp(resolved,"/mnt",4))return driver_error(d,"custom driver must be in internal executable storage");
     if(snprintf(d->driver_directory,sizeof d->driver_directory,"%s/",resolved)>=(int)sizeof d->driver_directory)return driver_error(d,"custom driver directory is too long");
-    const char *hooks=getenv("DM_ANDROID_LIBDIR");if(!hooks||!*hooks)return driver_error(d,"DM_ANDROID_LIBDIR is required for custom driver hooks");
-    if(!realpath(hooks,resolved))return driver_error(d,"hook library directory: %s",strerror(errno));
-    if(snprintf(d->hook_directory,sizeof d->hook_directory,"%s/",resolved)>=(int)sizeof d->hook_directory)return driver_error(d,"hook directory is too long");
+    if(d->backend==DM_VK_BACKEND_TURNIP){
+        const char *hooks=getenv("DM_ANDROID_LIBDIR");if(!hooks||!*hooks)return driver_error(d,"DM_ANDROID_LIBDIR is required for Turnip hooks");
+        if(!realpath(hooks,resolved))return driver_error(d,"hook library directory: %s",strerror(errno));
+        if(snprintf(d->hook_directory,sizeof d->hook_directory,"%s/",resolved)>=(int)sizeof d->hook_directory)return driver_error(d,"hook directory is too long");
+    }
     return 1;
 }
-static int load_globals(dm_vk_driver *d) {
-    dlerror();d->vkGetInstanceProcAddr=(PFN_vkGetInstanceProcAddr)dlsym(d->library,"vkGetInstanceProcAddr");
-    if(!d->vkGetInstanceProcAddr)return driver_error(d,"selected loader has no vkGetInstanceProcAddr");
+static int load_globals(dm_vk_driver *d,int panvk_icd) {
+    const char *entry=panvk_icd?"vk_icdGetInstanceProcAddr":"vkGetInstanceProcAddr";
+    dlerror();d->vkGetInstanceProcAddr=(PFN_vkGetInstanceProcAddr)dlsym(d->library,entry);
+    if(!d->vkGetInstanceProcAddr)return driver_error(d,"selected %s library has no %s",panvk_icd?"PanVK":"Vulkan loader",entry);
 #define DM_VK_LOAD(name) do{d->name=(PFN_##name)d->vkGetInstanceProcAddr(VK_NULL_HANDLE,#name);if(!d->name)return driver_error(d,"selected loader has no %s",#name);}while(0);
     DM_VK_GLOBAL_FUNCTIONS(DM_VK_LOAD)
 #undef DM_VK_LOAD
+    return 1;
+}
+static int open_panvk(dm_vk_driver *d) {
+    char path[1200];
+    if(snprintf(path,sizeof path,"%s%s",d->driver_directory,d->driver_name)>=(int)sizeof path)
+        return driver_error(d,"PanVK library path is too long");
+    d->library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+    if(!d->library){const char *error=dlerror();return driver_error(d,"PanVK dlopen: %s",error?error:"open failed");}
+    PFN_vk_icdNegotiateLoaderICDInterfaceVersion negotiate=
+        (PFN_vk_icdNegotiateLoaderICDInterfaceVersion)dlsym(d->library,"vk_icdNegotiateLoaderICDInterfaceVersion");
+    if(!negotiate)return driver_error(d,"PanVK loader negotiation entrypoint is missing");
+    uint32_t interface_version=CURRENT_LOADER_ICD_INTERFACE_VERSION;
+    VkResult result=negotiate(&interface_version);
+    if(result!=VK_SUCCESS||interface_version<1)
+        return driver_error(d,"PanVK ICD interface negotiation failed: result=%d version=%u",result,interface_version);
+    driver_log("PanVK ICD loader interface version=%u",interface_version);
+    if(!load_globals(d,1))return 0;
+    d->using_custom=1;
+    driver_log("requested=PanVK library=%s%s; ICD identity pending",d->driver_directory,d->driver_name);
     return 1;
 }
 static int open_system(dm_vk_driver *d) {
@@ -139,8 +175,8 @@ static int open_system(dm_vk_driver *d) {
     d->library=dlopen("libvulkan.so.1",RTLD_NOW|RTLD_LOCAL);
 #endif
     if(!d->library){const char *error=dlerror();return driver_error(d,"system Vulkan loader: %s",error?error:"open failed");}
-    if(!load_globals(d))return 0;
-    driver_log("requested=%s selected=system",d->requested_custom?"Turnip":"system");return 1;
+    if(!load_globals(d,0))return 0;
+    driver_log("requested=%s selected=system",d->requested_custom?backend_name(d->backend):"system");return 1;
 }
 int dm_vk_driver_open(dm_vk_driver *d) {
     memset(d,0,sizeof *d);
@@ -150,21 +186,27 @@ int dm_vk_driver_open(dm_vk_driver *d) {
     }
     if(!d->requested_custom)return open_system(d);
 #ifdef __ANDROID__
-    if(android_get_device_api_level()<30||access("/dev/kgsl-3d0",F_OK))driver_error(d,"Turnip T30 requires API30+ and KGSL");
-    else{
-        char path[1200];snprintf(path,sizeof path,"%slibadrenotools.so",d->hook_directory);d->adrenotools=dlopen(path,RTLD_NOW|RTLD_LOCAL);
-        if(!d->adrenotools){const char *error=dlerror();driver_error(d,"adrenotools: %s",error?error:"open failed");}
+    if(d->backend==DM_VK_BACKEND_PANVK){
+        if(android_get_device_api_level()<28)driver_error(d,"PanVK requires Android API28+");
+        else if(access("/dev/mali0",F_OK))driver_error(d,"PanVK requires the Mali kbase device /dev/mali0");
+        else if(open_panvk(d))return 1;
+    }else if(d->backend==DM_VK_BACKEND_TURNIP){
+        if(android_get_device_api_level()<30||access("/dev/kgsl-3d0",F_OK))driver_error(d,"Turnip T30 requires API30+ and KGSL");
         else{
-            adreno_open_fn open=(adreno_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan");
-            if(!open)driver_error(d,"adrenotools_open_libvulkan is missing");
-            else{d->library=open(RTLD_NOW,ADRENOTOOLS_DRIVER_CUSTOM,NULL,d->hook_directory,d->driver_directory,d->driver_name,NULL,NULL);
-                if(!d->library)driver_error(d,"adrenotools custom loader open failed");
-                else if(load_globals(d)){d->using_custom=1;driver_log("requested=Turnip library=%s%s; identity pending",d->driver_directory,d->driver_name);return 1;}
+            char path[1200];snprintf(path,sizeof path,"%slibadrenotools.so",d->hook_directory);d->adrenotools=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+            if(!d->adrenotools){const char *error=dlerror();driver_error(d,"adrenotools: %s",error?error:"open failed");}
+            else{
+                adreno_open_fn open=(adreno_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan");
+                if(!open)driver_error(d,"adrenotools_open_libvulkan is missing");
+                else{d->library=open(RTLD_NOW,ADRENOTOOLS_DRIVER_CUSTOM,NULL,d->hook_directory,d->driver_directory,d->driver_name,NULL,NULL);
+                    if(!d->library)driver_error(d,"adrenotools custom loader open failed");
+                    else if(load_globals(d,0)){d->using_custom=1;driver_log("requested=Turnip library=%s%s; identity pending",d->driver_directory,d->driver_name);return 1;}
+                }
             }
         }
-    }
+    }else driver_error(d,"unknown custom Vulkan backend");
 #else
-    driver_error(d,"custom Adreno loading is Android-only");
+    driver_error(d,"custom Vulkan drivers are Android-only");
 #endif
     char reason[sizeof d->error];snprintf(reason,sizeof reason,"%s",dm_vk_driver_error(d));driver_log("custom initialization failed: %s",reason);
     if(d->library){dlclose(d->library);d->library=NULL;}
@@ -282,7 +324,7 @@ static int profile_matches(dm_vk_driver *d,const char *directory) {
     FILE *file=fopen(path,"r");if(!file)return driver_error(d,"custom game requires shader subgroup profile: %s",strerror(errno));
     char text[32];size_t n=fread(text,1,sizeof text-1,file);int extra=fgetc(file),error=ferror(file);fclose(file);text[n]=0;
     errno=0;char *end;unsigned long size=strtoul(text,&end,10);while(isspace((unsigned char)*end))end++;
-    if(error||extra!=EOF||errno||end==text||*end||(size!=32&&size!=64&&size!=128))return driver_error(d,"invalid shader subgroup profile");
+    if(error||extra!=EOF||errno||end==text||*end||(size!=16&&size!=32&&size!=64&&size!=128))return driver_error(d,"invalid shader subgroup profile");
     if(size!=d->effective_shader_subgroup_size)return driver_error(d,"shader host subgroup %lu differs from selected shader%u (physical default%u); rebuild the cache",size,d->effective_shader_subgroup_size,d->subgroup_size);
     driver_log("shader host subgroup=%lu matches selected shader size; physical_default=%u explicit_request=%u",size,d->subgroup_size,d->requested_subgroup_size);return 1;
 }
@@ -298,9 +340,11 @@ int dm_vk_driver_validate(dm_vk_driver *d,VkPhysicalDevice physical,const char *
     if(!validate_subgroup_policy(d,physical))return 0;
     if(!d->using_custom){if(d->requested_subgroup_size&&shader_directory)return profile_matches(d,shader_directory);return 1;}
     if(base.apiVersion<VK_API_VERSION_1_1)return driver_error(d,"custom driver requires Vulkan1.1+");
-    if(!supported||identity.driverID!=VK_DRIVER_ID_MESA_TURNIP)return driver_error(d,"requested Turnip was not loaded; actual driver_id=%u",d->actual_driver_id);
+    VkDriverId expected=expected_driver_id(d->backend);
+    if(!supported||identity.driverID!=expected)
+        return driver_error(d,"requested %s was not loaded; actual driver_id=%u",backend_name(d->backend),d->actual_driver_id);
     if(shader_directory&&!profile_matches(d,shader_directory))return 0;
-    driver_log("requested=Turnip selected=Turnip identity verified");return 1;
+    driver_log("requested=%s selected=%s identity verified",backend_name(d->backend),backend_name(d->backend));return 1;
 }
 int dm_vk_driver_fallback(dm_vk_driver *d,const char *reason) {
     if(!d->using_custom)return 0;

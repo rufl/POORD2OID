@@ -12,6 +12,12 @@
 #include <vulkan/vulkan.h>
 #include "vulkan_dispatch.h"
 
+typedef enum dm_vk_backend {
+    DM_VK_BACKEND_SYSTEM = 0,
+    DM_VK_BACKEND_TURNIP = 1,
+    DM_VK_BACKEND_PANVK = 2
+} dm_vk_backend;
+
 typedef struct dm_vk_driver {
     void *library, *adrenotools;
     PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
@@ -22,6 +28,7 @@ typedef struct dm_vk_driver {
     DM_VK_DEVICE_FUNCTIONS(DM_VK_FIELD)
 #undef DM_VK_FIELD
     char hook_directory[1024], driver_directory[1024], driver_name[128], error[512];
+    dm_vk_backend backend;
     int requested_custom, using_custom, require_custom, needs_surface;
     uint32_t actual_driver_id, subgroup_size;
     // 保留真实物理缺省属性；shader明确选择的大小单独记录，政策只在初始化确定。

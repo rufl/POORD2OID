@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.app.NativeActivity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.ComponentCallbacks2;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.input.InputManager;
@@ -79,6 +80,7 @@ public final class D2RActivity extends NativeActivity {
     private static native void setPresentHz(int hz);
     private static native void setMenuOpen(boolean open);
     private static native void setSkipSaveOnExit(boolean skip);
+    private static native void trimGpuBuffers();
 
     // 存档导入/导出的文件选择器请求码（与文本输入等其它结果回调区分开）。
     // Request codes for the save pickers, kept apart from the other result callbacks.
@@ -100,9 +102,9 @@ public final class D2RActivity extends NativeActivity {
     private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 | 0 auto / 1 high / 2 balanced / 3 performance
     private static final int[] QUALITY_LEVELS = {-1, 0, 1, 2};   // 与 native 约定：-1 自动、0 高、1 平衡、2 性能 | the native contract
     // 帧率档：30 / 60 / 跟随屏幕（-1 = 跟随屏幕最高刷新率）。
-    // 缺省 60：宿主原本就把出图节拍钉在 60 Hz，120 Hz 屏上要自己选「跟随屏幕」才拿得到高帧率。
-    // Frame rate presets: 30 / 60 / follow the screen (-1 = the screen's maximum refresh rate).
-    // 60 by default: the host pinned the present rate at 60 Hz; on a 120 Hz screen "follow" is what unlocks the higher rate.
+    // 默认上限为 60；显式保存的 30 / 跟随选择仍优先。设备支持时可手动选择跟随 120 Hz。
+    // Frame-rate presets: 30 / 60 / follow the display maximum.
+    // Default to 60; saved 30/follow choices win. Choose follow manually to target 120 Hz when supported.
     private static final int[] PRESENT_HZ_VALUES = {30, 60, -1};
     private int presentHzIndex = 1;
     private static final String[] QUALITY_KEYS = {"dmAndroidMenuQualityAuto", "dmAndroidMenuQualityHigh", "dmAndroidMenuQualityBalanced", "dmAndroidMenuQualityPerformance"};
@@ -434,10 +436,8 @@ public final class D2RActivity extends NativeActivity {
         // (only an explicit 1 means on).
         String overlaySetting = LaunchSettings.read(configFile(), "debug_overlay");
         overlayEnabled = overlaySetting != null && overlaySetting.equals("1");
-        // 帧率档：配置里写了就按它来（缺省 60，与宿主原本一样）。原生那边在开机时读同一个键，
-        // 这里读一份只是为了菜单上的标签显示得对。
-        // The frame rate preset: use the configured one when present (60 by default, as the host had it). The native
-        // side reads the same key at startup; this copy is only so the menu label shows the right value.
+        // 帧率档：配置里写了就按配置；缺省上限为 60 Hz。原生启动与这里的菜单标签使用同一设置。
+        // Use the saved frame-rate preset when present; default to a 60 Hz cap. Native startup and this menu label share the setting.
         String hzSetting = LaunchSettings.read(configFile(), "present_hz");
         if (hzSetting != null) {
             for (int i = 0; i < PRESENT_HZ_VALUES.length; i++) {
@@ -689,6 +689,14 @@ public final class D2RActivity extends NativeActivity {
             });
             dialog.show();
         });
+    }
+
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            Log.i("D2RAndroid", "[android-memory] trimming idle Vulkan upload buffers level=" + level);
+            trimGpuBuffers();
+        }
     }
 
     @Override protected void onDestroy() {

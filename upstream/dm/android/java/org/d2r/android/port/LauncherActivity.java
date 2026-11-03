@@ -81,11 +81,10 @@ public final class LauncherActivity extends Activity {
     // 1280x720 and 1600x900 are there for GPU-bound devices: one step down in resolution is a real step up in frame
     // rate (measured 1080p -> 720p: about 10 -> 16 fps).
     private static final String[] RESOLUTION_PRESETS = {"", "1280x720", "1600x900", "1920x1080", "2560x1440"};
-    // 图形驱动两档：系统自带的 Adreno 驱动，和随 APK 一起发的 Turnip（选它由 native 的 gpu-driver.conf 生效）。
-    // Measured difference: the Adreno driver shows blocky lighting around the player, Turnip does not — see the
-    // driver notes under docs/.
-    private static final String[] DRIVER_STATES = {"system", "turnip"};
+    // Keep stock Vulkan, FristOneRR PanVK for Mali/kbase, and Turnip for Qualcomm KGSL devices.
+    private static final String[] DRIVER_STATES = {"system", "panvk", "turnip"};
     private static final String TURNIP_ASSET = "turnip/vulkan.purple.so";
+    private static final String PANVK_ASSET = "panvk/libvulkan_panfrost.so";
 
     private String text(String key) {
         int resource = getResources().getIdentifier(key, "string", getPackageName());
@@ -194,11 +193,6 @@ public final class LauncherActivity extends Activity {
         return text("dmAndroidLaunchResolution") + "：" + parts[0] + "×" + parts[1];
     }
 
-    // 内置 Turnip 是构建时打进 assets 的（build.py --turnip / dm/android/prebuilt/turnip）。
-    // APK 里没有它就把这一行整行藏起来 —— 不让玩家选一个根本装不出来的东西；系统驱动始终可用。
-    // The built-in Turnip is packed into assets at build time (build.py --turnip / dm/android/prebuilt/turnip).
-    // Without it the row hides entirely, so nobody can pick something that cannot work; the system driver is
-    // always available.
     private boolean turnipBundled() {
         try (InputStream stream = getAssets().open(TURNIP_ASSET)) {
             return stream != null;
@@ -206,17 +200,43 @@ public final class LauncherActivity extends Activity {
             return false;
         }
     }
-
+    private boolean turnipAvailable() {
+        return turnipBundled() && new File("/dev/kgsl-3d0").exists();
+    }
+    private boolean panvkBundled() {
+        try (InputStream stream = getAssets().open(PANVK_ASSET)) {
+            return stream != null;
+        } catch (IOException error) {
+            return false;
+        }
+    }
+    private boolean panvkAvailable() {
+        return panvkBundled() && new File("/dev/mali0").exists();
+    }
+    private boolean driverAvailable(String driver) {
+        if (driver.equals("system")) return true;
+        if (driver.equals("panvk")) return panvkAvailable();
+        if (driver.equals("turnip")) return turnipAvailable();
+        return false;
+    }
+    private int nextDriverIndex() {
+        for (int offset = 1; offset <= DRIVER_STATES.length; offset++) {
+            int candidate = (driverIndex + offset) % DRIVER_STATES.length;
+            if (driverAvailable(DRIVER_STATES[candidate])) return candidate;
+        }
+        return 0;
+    }
     private String driverLabel() {
-        return text("dmAndroidLaunchDriver") + "：" + text(
-                DRIVER_STATES[driverIndex].equals("turnip") ? "dmAndroidLaunchDriverTurnip" : "dmAndroidLaunchDriverSystem");
+        String state = DRIVER_STATES[driverIndex];
+        String key = state.equals("panvk") ? "dmAndroidLaunchDriverPanvk"
+                : state.equals("turnip") ? "dmAndroidLaunchDriverTurnip" : "dmAndroidLaunchDriverSystem";
+        return text("dmAndroidLaunchDriver") + "：" + text(key);
     }
 
-    // 数据包里那张子组档位表（一行裸数字，不是 key=value）。端口会用驱动实际选中的子组尺寸逐项校验它，
-    // 不一致就拒绝启动 —— 所以配置里的 subgroup_size 必须照抄这里，不能自己猜。
-    // The package's subgroup profile (a bare number, not key=value). The port validates it against the size the
-    // driver actually selected and refuses to start on a mismatch, so subgroup_size has to be copied from here
-    // rather than guessed.
+    // 数据包里那张子组档位表（一行裸数字，不是 key=value）。Turnip 的预编译着色器按该值生成；
+    // PanVK 使用真实物理子组并由 native 对照同一份 profile。
+    // The package's subgroup profile is a bare number. Turnip shaders are built for that explicit size; PanVK uses
+    // its reported physical size and the native host-profile check verifies that it matches.
     private String readProfileSize() {
         File profile = new File(packageDirectory(), "shaders/host-subgroup-size.txt");
         try (InputStream stream = new FileInputStream(profile)) {
@@ -229,42 +249,116 @@ public final class LauncherActivity extends Activity {
             return null;
         }
     }
-
-    // 驱动选择通过应用内部目录里的 gpu-driver.conf 生效（native 的 gpu_driver.c 读它，不需要任何环境变量）：
-    // 选内置驱动就把 assets 里的 .so 放到内部可执行目录再写这份配置，选系统驱动就把配置删掉。
-    // require_custom 留 0：驱动万一在这台机器上加载失败，端口会退回系统驱动并在日志里写明
-    // （requested=Turnip selected=system），不会让游戏直接起不来。
-    // The choice takes effect through gpu-driver.conf in the app's internal directory, which native's
-    // gpu_driver.c reads without any environment variable: the built-in driver copies its .so into internal
-    // executable storage and writes that file, while the system driver deletes it. require_custom stays 0 so that
-    // a driver which fails to load falls back to the system one with the log saying so
-    // (requested=Turnip selected=system) instead of refusing to start the game.
-    private String prepareDriver() {
-        File temporary = new File(getFilesDir(), "temp");
-        File configuration = new File(temporary, "gpu-driver.conf");
-        if (!DRIVER_STATES[driverIndex].equals("turnip")) {
-            configuration.delete();
-            return null;
+    private String readSmallText(InputStream input) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        byte[] buffer = new byte[128];
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (bytes.size() + count > 128) return null;
+            bytes.write(buffer, 0, count);
         }
-        String profile = readProfileSize();
-        if (profile == null) return "host-subgroup-size.txt";
-        File directory = new File(temporary, "driver");
-        if (!directory.isDirectory() && !directory.mkdirs()) return text("dmAndroidLaunchDriverFailed");
-        File library = new File(directory, "vulkan.purple.so");
-        try (InputStream source = getAssets().open(TURNIP_ASSET);
-             OutputStream target = new FileOutputStream(library, false)) {
-            byte[] buffer = new byte[262144];
-            int count;
-            while ((count = source.read(buffer)) > 0) target.write(buffer, 0, count);
+        return new String(bytes.toByteArray(), StandardCharsets.UTF_8).trim();
+    }
+    private String copyDriverAsset(String asset, File target) {
+        File directory = target.getParentFile();
+        if (!directory.isDirectory() && !directory.mkdirs()) return "cannot create driver directory";
+        String checksumAsset = asset.substring(0, asset.lastIndexOf('/') + 1) + "driver.sha256";
+        String expectedHash;
+        try (InputStream checksum = getAssets().open(checksumAsset)) {
+            expectedHash = readSmallText(checksum);
         } catch (IOException error) {
+            return "bundled driver checksum is missing";
+        }
+        if (expectedHash == null || !expectedHash.matches("[0-9a-f]{64}")) return "bundled driver checksum is invalid";
+        File marker = new File(directory, target.getName() + ".sha256");
+        File temporary = new File(directory, target.getName() + ".pending");
+        File markerTemporary = new File(directory, marker.getName() + ".pending");
+        if (temporary.exists() && !temporary.delete()) return "cannot remove incomplete driver copy";
+        int expectedSize;
+        try (InputStream source = getAssets().open(asset)) {
+            expectedSize = source.available();
+            if (expectedSize <= 0) return "bundled driver asset is empty";
+            String installedHash = null;
+            if (marker.isFile()) {
+                try (InputStream previous = new FileInputStream(marker)) {
+                    installedHash = readSmallText(previous);
+                } catch (IOException ignored) { }
+            }
+            if (target.isFile() && target.length() == expectedSize && expectedHash.equals(installedHash)) return null;
+            try (FileOutputStream output = new FileOutputStream(temporary, false)) {
+                byte[] buffer = new byte[262144];
+                int count;
+                while ((count = source.read(buffer)) > 0) output.write(buffer, 0, count);
+                output.getFD().sync();
+            }
+            if (temporary.length() != expectedSize) {
+                temporary.delete();
+                return "bundled driver copy is incomplete";
+            }
+            if (target.exists() && !target.delete()) return "cannot replace old driver library";
+            if (!temporary.renameTo(target)) return "cannot activate copied driver library";
+            try (FileOutputStream output = new FileOutputStream(markerTemporary, false)) {
+                output.write((expectedHash + "\n").getBytes(StandardCharsets.UTF_8));
+                output.getFD().sync();
+            }
+            if (marker.exists() && !marker.delete()) return "cannot replace driver checksum marker";
+            if (!markerTemporary.renameTo(marker)) return "cannot activate driver checksum marker";
+            return null;
+        } catch (IOException error) {
+            temporary.delete();
+            markerTemporary.delete();
             return error.getMessage();
         }
-        write(configuration, "# 由启动界面写入（内置 Turnip）| written by the launcher (built-in Turnip)\n"
-                + "directory=" + directory.getAbsolutePath() + "\n"
-                + "library=vulkan.purple.so\n"
-                + "require_custom=0\n"
-                + "subgroup_size=" + profile + "\n");
+    }
+    private String writeDriverConfiguration(File configuration, String content) {
+        File pending = new File(configuration.getParentFile(), configuration.getName() + ".pending");
+        try (FileOutputStream output = new FileOutputStream(pending, false)) {
+            output.write(content.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        } catch (IOException error) {
+            pending.delete();
+            return error.getMessage();
+        }
+        if (configuration.exists() && !configuration.delete()) {
+            pending.delete();
+            return "cannot replace driver configuration";
+        }
+        if (!pending.renameTo(configuration)) {
+            pending.delete();
+            return "cannot activate driver configuration";
+        }
         return null;
+    }
+    // 系统 Vulkan 始终可选；Turnip 只匹配 KGSL，PanVK 只匹配 Mali kbase。
+    // The system driver is always available; Turnip is KGSL-only and PanVK is Mali-kbase-only.
+    private String prepareDriver() {
+        if (driverIndex < 0 || driverIndex >= DRIVER_STATES.length
+                || !driverAvailable(DRIVER_STATES[driverIndex])) driverIndex = 0;
+        String selected = DRIVER_STATES[driverIndex];
+        File temporary = new File(getFilesDir(), "temp");
+        File configuration = new File(temporary, "gpu-driver.conf");
+        if (selected.equals("system")) {
+            if (configuration.exists() && !configuration.delete()) {
+                return "cannot remove stale custom driver configuration";
+            }
+            return null;
+        }
+        boolean panvk = selected.equals("panvk");
+        String profile = panvk ? null : readProfileSize();
+        if (!panvk && profile == null) return "host-subgroup-size.txt";
+        String libraryName = panvk ? "libvulkan_panfrost.so" : "vulkan.purple.so";
+        String asset = panvk ? PANVK_ASSET : TURNIP_ASSET;
+        File directory = new File(temporary, "driver-" + selected);
+        File library = new File(directory, libraryName);
+        String copyProblem = copyDriverAsset(asset, library);
+        if (copyProblem != null) return copyProblem;
+        StringBuilder content = new StringBuilder("# written by the launcher\n");
+        content.append("backend=").append(selected).append('\n');
+        content.append("directory=").append(directory.getAbsolutePath()).append('\n');
+        content.append("library=").append(libraryName).append('\n');
+        content.append("require_custom=1\n");
+        if (!panvk) content.append("subgroup_size=").append(profile).append('\n');
+        return writeDriverConfiguration(configuration, content.toString());
     }
 
     private String importLabel() {
@@ -324,15 +418,12 @@ public final class LauncherActivity extends Activity {
             if (found >= 0) resolutionIndex = found;
             else if (!preset.isEmpty()) { resolutionIndex = -1; customResolution = preset; }
         }
-        // 驱动选择记在启动界面自己的状态文件里：launch-settings.conf 由 native 按严格白名单解析，塞不进新键。
-        // APK 没带内置驱动时强制回到系统驱动，免得状态文件里的旧值让界面显示一个不存在的选项。
-        // The driver choice lives in the launcher's own state file: launch-settings.conf is parsed by native
-        // against a strict key whitelist, so a new key cannot go there. When the APK ships no built-in driver the
-        // choice is forced back to the system driver, so a stale value cannot make the screen offer a missing one.
+        // Driver choices saved by older APKs remain selected only when that backend exists on this GPU.
+        // A stale Turnip selection on Mali resets to stock; an available PanVK selection is retained.
         String driver = LaunchSettings.read(stateFile(), "driver");
         driverIndex = 0;
         if (driver != null) for (int i = 0; i < DRIVER_STATES.length; i++) if (DRIVER_STATES[i].equals(driver)) driverIndex = i;
-        if (!turnipBundled()) driverIndex = 0;
+        if (!driverAvailable(DRIVER_STATES[driverIndex])) driverIndex = 0;
         applyLabels();
     }
 
@@ -376,9 +467,9 @@ public final class LauncherActivity extends Activity {
         resolutionItem.setOnClickListener(v -> { resolutionIndex = (resolutionIndex + 1) % RESOLUTION_PRESETS.length; applyLabels(); });
         column.addView(resolutionItem);
 
-        if (turnipBundled()) {
+        if (turnipAvailable() || panvkAvailable()) {
             driverItem = item(driverLabel(), 19, PARCHMENT, false, true);
-            driverItem.setOnClickListener(v -> { driverIndex = (driverIndex + 1) % DRIVER_STATES.length; applyLabels(); writeState(); });
+            driverItem.setOnClickListener(v -> { driverIndex = nextDriverIndex(); applyLabels(); writeState(); });
             column.addView(driverItem);
         }
 
@@ -611,11 +702,11 @@ public final class LauncherActivity extends Activity {
             setStatus(text("dmAndroidLaunchNeedsImport"), WARNING);
             return;
         }
-        // 先把驱动准备好（选内置 Turnip 就把 .so 复制到内部可执行目录并写 gpu-driver.conf，选系统驱动就删掉它）。
-        // 失败就停下不启动：否则玩家以为在用内置驱动，实际跑的是系统驱动。
-        // Prepare the driver first (copy the .so into internal executable storage and write gpu-driver.conf for the
-        // built-in Turnip; delete it for the system driver). On failure stop rather than start: the player would
-        // otherwise believe the built-in driver is in use while the system one runs.
+        // 先准备所选驱动：自定义驱动复制到应用内部目录并写 gpu-driver.conf；系统模式删除旧配置。
+        // Prepare the selected driver first: custom libraries are copied into internal storage and gpu-driver.conf
+        // is written; the system mode removes stale custom configuration.
+        // 失败就停止启动，避免界面显示所选驱动但实际加载系统驱动。
+        // Abort on failure rather than showing one selection while loading another driver.
         setStatus(text("dmAndroidLaunchDriverPreparing"), MUTED);
         String driverProblem = prepareDriver();
         if (driverProblem != null) {

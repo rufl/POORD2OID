@@ -114,23 +114,17 @@ static int descriptor_type_uniform(VkDescriptorType type) {
 // build and run). Rewrite equivalently: set the SPIR-V LocalSize Z to 1 and multiply the caller's
 // dispatch Z by the original LocalZ, leaving thread counts and (x,y,z) expansion order unchanged.
 enum { DM_OP_EXECUTION_MODE = 16, DM_EXECUTION_MODE_LOCAL_SIZE = 17 };
-// Mali 的这一限制按驱动家族判断：设备名里带 Mali。
-// 注意：着色器创建会在提交线程与 pso-warm 预热线程上并发发生，所以这里的惰性初始化必须线程安全，
-// 否则两条线程可能同时看到 value<0 并各自执行一次 vkGetPhysicalDeviceProperties。
-// Judge by driver family: a device name that says Mali.
-// Shader creation happens concurrently on the submit and the pso-warm thread, so this lazy init must be
-// thread safe; otherwise both threads can observe value<0 and each run vkGetPhysicalDeviceProperties.
+// Use the startup Vulkan profile (including ARM's vendor ID); retain a safe lazy fallback for fixtures.
 static int gpu_has_mali_local_z_limit(void) {
-    static _Atomic int cached = -1;
-    int value = atomic_load_explicit(&cached, memory_order_acquire);
-    if(value < 0){
+    int value=atomic_load_explicit(&gpu_mali_family,memory_order_acquire);
+    if(value<0){
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(physical,&properties);
-        value = strstr(properties.deviceName,"Mali") ? 1 : 0;
-        int expected = -1;
-        if(atomic_compare_exchange_strong(&cached,&expected,value)){
-            if(value)LOG("[vulkan] Mali 检测到：compute 的 LocalSize Z 会折进 dispatch（驱动在 Z>1 时崩溃）");
-        }else value = atomic_load_explicit(&cached, memory_order_acquire);
+        value=gpu_is_mali_properties(&properties);
+        int expected=-1;
+        if(atomic_compare_exchange_strong(&gpu_mali_family,&expected,value)){
+            if(value)LOG("[vulkan] Mali detected: compute LocalSize Z folds into dispatch Z (driver crashes when Z>1)");
+        }else value=atomic_load_explicit(&gpu_mali_family,memory_order_acquire);
     }
     return value;
 }

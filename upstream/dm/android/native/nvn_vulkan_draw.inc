@@ -9,6 +9,16 @@ static VkImageView attachment_view(image_entry *e,const view_t *v) {
     return image_view_get(e,VK_IMAGE_VIEW_TYPE_2D,texture_range(e,v));
 }
 #include "nvn_vulkan_pass.inc"
+static VkRect2D graphics_scissor_clip(p_scissor requested,uint32_t width,uint32_t height) {
+    int64_t left=requested.x,top=requested.y;
+    int64_t right=requested.w>0?left+(int64_t)requested.w:(int64_t)width;
+    int64_t bottom=requested.h>0?top+(int64_t)requested.h:(int64_t)height;
+    if(left<0)left=0;if(top<0)top=0;
+    if(left>(int64_t)width)left=width;if(top>(int64_t)height)top=height;
+    if(right<left)right=left;if(bottom<top)bottom=top;
+    if(right>(int64_t)width)right=width;if(bottom>(int64_t)height)bottom=height;
+    return (VkRect2D){{(int32_t)left,(int32_t)top},{(uint32_t)(right-left),(uint32_t)(bottom-top)}};
+}
 
 // 管线按真正的固定状态复用；视口、剪裁、颜色常量和模板掩码/参考值动态设置。
 // Reuse pipelines by actual fixed state; viewport, scissor, blend constants and stencil masks/reference are dynamic.
@@ -158,7 +168,7 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     static uint64_t depth_ranges_seen[12];static unsigned depth_ranges_count;uint64_t depth_range_bits;
     if(depth_ranges_count<12){memcpy(&depth_range_bits,&state.depth_range,sizeof depth_range_bits);unsigned i=0;while(i<depth_ranges_count&&depth_ranges_seen[i]!=depth_range_bits)i++;
         if(i==depth_ranges_count){depth_ranges_seen[depth_ranges_count++]=depth_range_bits;LOG("[vulkan-depth] range=%g,%g test=%u write=%u compare=%u target=%s",viewport.minDepth,viewport.maxDepth,(unsigned)state.depth.dt,(unsigned)state.depth.dw,(unsigned)state.depth.df,state.rt.depth?"depth":"color-only");}}
-    int x=state.scissor.x>0?state.scissor.x:0,y=state.scissor.y>0?state.scissor.y:0;int sw=state.scissor.w>0?state.scissor.w:width,sh=state.scissor.h>0?state.scissor.h:height;if(x+sw>(int)width)sw=width-x;if(y+sh>(int)height)sh=height-y;if(sw<0||sh<0)die("Vulkan scissor outside target");VkRect2D scissor={{x,y},{sw,sh}};
+    VkRect2D scissor=graphics_scissor_clip(state.scissor,width,height);
     // Metal 的裁剪空间 Y 向上，Vulkan 的正高度视口 Y 向下；用负高度保持 NVN 画面方向。
     // Metal clip Y points up while Vulkan's positive viewport points down; a negative viewport preserves NVN orientation.
     viewport.y += viewport.height; viewport.height = -viewport.height;
@@ -200,6 +210,6 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&writes,0,NULL,0,NULL);}
     }
     batch_draws++;
-    if (draw_count <= 12 && getenv("DM_VK_TRACE")) LOG("[vulkan] draw=%llu %s/%s rt=%ux%u vp=%g,%g %gx%g sc=%d,%d %dx%d mask=%#x cull=%u front=%u samples=%llu", (unsigned long long)draw_count, vs->key, fs->key, width, height, viewport.x, viewport.y, viewport.width, viewport.height, x, y, sw, sh, state.mask.mask, (unsigned)state.polygon.cull, (unsigned)state.polygon.front, (unsigned long long)samples_passed);
+    if (draw_count <= 12 && getenv("DM_VK_TRACE")) LOG("[vulkan] draw=%llu %s/%s rt=%ux%u vp=%g,%g %gx%g sc=%d,%d %ux%u mask=%#x cull=%u front=%u samples=%llu", (unsigned long long)draw_count, vs->key, fs->key, width, height, viewport.x, viewport.y, viewport.width, viewport.height, scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height, state.mask.mask, (unsigned)state.polygon.cull, (unsigned)state.polygon.front, (unsigned long long)samples_passed);
 }
 #include "nvn_vulkan_warm.inc"

@@ -19,6 +19,7 @@ typedef struct {
     int (*report)(APerformanceHintSession *,int64_t);
     void (*close)(APerformanceHintSession *);
     int64_t (*preferred_rate)(APerformanceHintManager *);
+    int (*update_target)(APerformanceHintSession *,int64_t);
 } hint_api;
 
 static hint_api api;
@@ -27,7 +28,7 @@ static pthread_mutex_t hint_lock=PTHREAD_MUTEX_INITIALIZER;
 static APerformanceHintSession *session;
 static int available,attempted,reported;
 static int32_t bound_tid;
-static const int64_t target_ns=16666667;
+static int64_t target_ns=16666667;
 static int paused,cycle_pending,cycle_invalid,cycle_index;
 static const void *cycle_window;
 static int32_t cycle_tid;
@@ -55,6 +56,7 @@ static void load_api(void) {
     LOAD_HINT(report,"APerformanceHint_reportActualWorkDuration");
     LOAD_HINT(close,"APerformanceHint_closeSession");
     LOAD_HINT(preferred_rate,"APerformanceHint_getPreferredUpdateRateNanos");
+    LOAD_HINT(update_target,"APerformanceHint_updateTargetWorkDuration");
 #undef LOAD_HINT
     available=api.manager&&api.create&&api.report&&api.close;
     // 冷路径写入已有游戏日志，避免设备过滤 logcat 后误判会话状态。
@@ -101,6 +103,24 @@ static void session_create_locked(int32_t tid) {
         }else {fprintf(stderr,"[dm] [adpf] session creation failed manager=%d tid=%d\n",manager!=NULL,tid);__android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session not supported/available; continue with normal scheduling");}
     }
 }
+void dm_android_performance_set_target(int64_t target_duration_ns) {
+    if(target_duration_ns<1000000||target_duration_ns>1000000000)return;
+    pthread_once(&load_once,load_api);
+    pthread_mutex_lock(&hint_lock);
+    if(target_ns!=target_duration_ns){
+        target_ns=target_duration_ns;cycle_clear();
+        if(session){
+            int result=api.update_target?api.update_target(session,target_ns):-1;
+            if(result){
+                fprintf(stderr,"[dm] [adpf] target update unavailable/failed result=%d; recreate session target_ns=%lld\n",result,(long long)target_ns);
+                api.close(session);session=NULL;bound_tid=0;attempted=0;reported=0;
+            }
+        }
+        fprintf(stderr,"[dm] [adpf] target updated target_ns=%lld update_api=%d\n",(long long)target_ns,api.update_target!=NULL);
+    }
+    pthread_mutex_unlock(&hint_lock);
+}
+
 
 void dm_android_performance_frame_end(const void *window,int index) {
     uint64_t ended=monotonic_ns();int32_t tid=gettid();
@@ -144,4 +164,5 @@ void dm_android_performance_frame_end(const void *window,int index) {(void)windo
 void dm_android_performance_wsi_calls(uint64_t duration_ns) {(void)duration_ns;}
 void dm_android_performance_close(void) {}
 void dm_android_performance_resume(void) {}
+void dm_android_performance_set_target(int64_t target_duration_ns) {(void)target_duration_ns;}
 #endif

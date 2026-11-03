@@ -47,13 +47,14 @@ int dm_lang_from_tag(const char *t) {
     for (unsigned k = 0; k < sizeof zh / sizeof *zh; k++) if (!strcmp(l, zh[k])) return 8;
     return 0;
 }
-// 首次安装（还没有设置文件）时的语言：按 iOS 首选语言第一项（CFLocaleCopyPreferredLanguages，过 dm_lang_from_tag：中文及汉语方言 → 简中，其余 → 英文）。
-// 曾一律简中（那时触屏版没有能改语言的入口，系统是英文的中文玩家新装进了英文版改不回来）；自定义页标题行有语言开关（dm_custom.c lang_en），放开。
-// DM_LANG（宿主 / 测试模拟，同 hle_oe.c）优先；非 iOS 的宿主没有系统语言可问，照旧简中
-// Language on first install (no settings file yet): by the first entry of the iOS preferred languages (CFLocaleCopyPreferredLanguages, through dm_lang_from_tag: Chinese and Sinitic varieties → Simplified Chinese, everything else → English).
-// It used to be always Simplified Chinese (back then the touch version had no way to change the language, and a Chinese player whose system was in English got the English version on a fresh install and could not change it back); the Custom page title row now has a language switch (dm_custom.c lang_en), so this is opened up.
-// DM_LANG (host / test simulation, same as hle_oe.c) takes priority; a non-iOS host has no system language to ask and stays Simplified Chinese as before
+// 首次安装时的语言：Android APK 固定英文；其他平台按 iOS 首选语言，非 iOS 宿主仍按简中。
+// DM_LANG 仅用于非 Android 的宿主 / 测试模拟。
+// First-install language: the Android APK is fixed to English; other platforms use the first iOS preferred language, while non-iOS hosts stay Simplified Chinese.
+// DM_LANG is honored only by non-Android hosts / test simulations.
 int dm_sys_lang(void) {
+#ifdef __ANDROID__
+    return 0;
+#else
     const char *e = getenv("DM_LANG"); if (e && *e) return dm_lang_from_tag(e);
 #if TARGET_OS_IPHONE
     int r = 8; CFArrayRef a = CFLocaleCopyPreferredLanguages();
@@ -62,8 +63,8 @@ int dm_sys_lang(void) {
 #else
     return 8;
 #endif
+#endif
 }
-
 static int settings_lang(void) {   // 设置文件里的 "Language"；文件不在 = 首次安装，按系统语言（hle_fs.c 首次建设置文件时也写这个值）；文件在但没有这个键 = -1 | "Language" in the settings file; file missing = first install, use the system language (hle_fs.c writes the same value when it first creates the settings file); file present but key missing = -1
     const char *sv = getenv("DM_SAVE"); if (!sv) return dm_sys_lang();
     char path[1200]; snprintf(path, sizeof path, "%s/Settings/Settings.json", sv);
@@ -72,13 +73,17 @@ static int settings_lang(void) {   // 设置文件里的 "Language"；文件不�
     const char *k = strstr(buf, "\"Language\""); if (!k) return -1;
     k = strchr(k + 10, ':'); return k ? atoi(k + 1) : -1;
 }
-
 int dm_lang_index(void) {
+#ifdef __ANDROID__
+    return 0;
+#else
     int l = atomic_load(&g_dm_lang); if (l >= 0) return l;
     static _Atomic int file = -2; int f = atomic_load(&file); if (f == -2) { f = settings_lang(); atomic_store(&file, f); }
     return f < 0 ? 8 : f;   // 有设置文件但没写语言 = 游戏缺省（宿主报 zh-Hans） | settings file exists but has no language entry = the game default (the host reports zh-Hans)
+#endif
 }
 int dm_lang_zh(void) { int l = dm_lang_index(); return l == 8 || l == 9; }   // 繁体（zhTW）我们的字也用简中（繁体玩家读简体比读英文顺） | for Traditional Chinese (zhTW) our text also uses Simplified Chinese (Traditional Chinese players read Simplified more easily than English)
+
 
 const char *dm_ui(const char *key) {
     for (unsigned i = 0; i < sizeof k_dm_i18n / sizeof *k_dm_i18n; i++) if (!strcmp(k_dm_i18n[i].k, key)) return dm_lang_zh() ? k_dm_i18n[i].zh : k_dm_i18n[i].en;

@@ -1163,12 +1163,10 @@ static void sleep_until_ns(uint64_t dl) {   // 单调时钟上的绝对时刻 | 
     uint64_t now = now_ns(); if (dl <= now) return;
     mach_wait_until(mach_absolute_time() + (dl - now) * tb.denom / tb.numer);
 }
-// 出图固定 60 Hz：自适应机制在 24/24 份真机日志第 60 帧退档且不再回升，本期先以 60 帧为硬底。
-// DM_PRESENT_HZ=0（不限帧率）只作显式的性能剖析开关：游戏部分界面逻辑按帧计数（同存档不限帧率时
-// SaveIndicatorPanel 4181 条、限 60 帧时 0 条，与真值一致），不限帧率在语义上是错的跑法，不能作判据 / 对拍 / 缺省。单测用 nvn_present_config 直接设
-// Present is fixed at 60 Hz: the adaptive mechanism stepped down at frame 60 in 24/24 real-device logs and never came back up, so for this phase 60 fps is the hard floor.
-// DM_PRESENT_HZ=0 (uncapped frame rate) serves only as an explicit performance profiling switch: some of the game's UI logic counts frames (with the same save, uncapped gives
-// 4181 SaveIndicatorPanel entries and capped at 60 fps gives 0, which matches the ground truth), so uncapped is a semantically wrong way to run and must not be used as a criterion / cross-check / default. Unit tests set it directly with nvn_present_config
+// 主机默认出图固定 60 Hz；Android 前端在用户未保存帧率档时主动跟随屏幕最高刷新率。
+// The host default is fixed at 60 Hz; Android follows the display maximum when the user has not saved a frame-rate choice.
+// DM_PRESENT_HZ=0（不限帧率）只作性能剖析：部分界面逻辑按帧计数，不限帧率在语义上是错的跑法，不能作判据或缺省。
+// DM_PRESENT_HZ=0 (uncapped frame rate) is only for profiling: some UI logic counts frames, so uncapped runs are semantically wrong and must not be used as a criterion or default.
 static int g_hz = -1, g_display_mode, g_hz_follow;
 void nvn_present_config(int hz, int display_mode) { g_hz = hz; g_display_mode = display_mode; }
 // 前端可改的出图节拍（帧率目标）：hz > 0 固定帧率，hz < 0 跟随屏幕最高刷新率。
