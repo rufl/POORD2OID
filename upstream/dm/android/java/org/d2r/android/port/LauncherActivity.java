@@ -201,7 +201,8 @@ public final class LauncherActivity extends Activity {
         }
     }
     private boolean turnipAvailable() {
-        return turnipBundled() && new File("/dev/kgsl-3d0").exists();
+        return android.os.Build.VERSION.SDK_INT >= 30
+            && turnipBundled() && new File("/dev/kgsl-3d0").exists();
     }
     private boolean panvkBundled() {
         try (InputStream stream = getAssets().open(PANVK_ASSET)) {

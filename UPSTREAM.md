@@ -21,9 +21,9 @@
 | **Mali 上 3D 场景全黑的修复**：折叠时同步改写着色器手算的 z 索引 | `upstream/dm/android/native/nvn_vulkan_zfold.inc`（新）、`upstream/dm/android/native/nvn_vulkan_shader.inc`（改） |
 | 上述修复的独立测试 | `upstream/dm/android/tests/zfold_test.c`（新） |
 | Mali 的实测限制与踩坑记录 | `upstream/docs/ANDROID_MALI_LIMITS.zh-CN.md`（新） |
+| **System / PanVK / Turnip Vulkan 选择** | `upstream/dm/android/java/org/d2r/android/port/LauncherActivity.java`、`upstream/dm/android/native/gpu_driver.c`：System 回退、Mali kbase 的 PanVK、API 30+ KGSL 的 Turnip |
 
-驱动注入、Vulkan 转发 shim、APK 改包这些**不在** `upstream/` 里，而在 `adapt/`，
-最后进到打好的 APK。
+Adreno 专有驱动注入、Vulkan 转发 shim 与 APK 改包位于 `adapt/`；通用 System / PanVK / Turnip 选择与开源驱动打包位于 `upstream/`。
 
 ## 怎么看出与上游的差异
 

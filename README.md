@@ -16,7 +16,8 @@
 | **[jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** | **本项目最初的灵感来源**。它实现了 iPhone / iPad / Mac / Android / 鸿蒙 上的兼容层（NVN → Metal），触屏操作、60 帧、秘境模式都在里面。本项目的宿主代码、NVN 截获思路、触屏与手柄框架都源自它 | MIT |
 | **[sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android)** | 把 d2r-mobile 移植到安卓的版本。**本仓库的 `upstream/` 就是它的快照**（`5d8e322`），安卓端的手柄接管、帧率档、崩溃落盘等改动在它之上 | MIT |
 | **[Eden](https://git.eden-emu.dev/eden-emu/eden)** | Switch 模拟器。**只作参考**：它的异步调度、完成序号、上传缓冲池、Android 驱动装载是本项目 Vulkan 后端的设计参照。**它的着色器翻译是 GPL-3.0，没有并入本 MIT 项目** | GPL-3.0（仅参考） |
-| **[Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa)** | 随包分发的开源 Vulkan 驱动（T30 Adreno 构建，作者 [@Mr_Purple_666](https://gitlab.freedesktop.org/mesa/mesa)），MIT，原样放在 `upstream/dm/android/prebuilt/turnip/` | MIT |
+| **[Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa)** | 随包分发的开源 Vulkan 驱动（T30 Adreno 构建，作者 [@Mr_Purple_666](https://gitlab.freedesktop.org/mesa/mesa)），MIT；仅支持 Qualcomm KGSL 设备 | MIT |
+| **[FristOneRR PanVK](https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0)** | Mesa-based Mali kbase Vulkan 驱动，MIT；作为实验选项随通用 Android APK 分发 | MIT |
 
 **没有这两个仓库，本项目不会存在。** 再次致谢 jhaizhou 与 sydeEvans。
 
@@ -66,7 +67,7 @@
 
 | 项 | 说明 |
 | --- | --- |
-| 成品 APK | 用上面的产线做出；**Mali 设备不需要专有驱动**，用随包分发的 Turnip 或系统驱动 |
+| 成品 APK | 小米 11T / Mali：选择实验性 PanVK 或系统 Vulkan；Turnip 仅面向 API 30+ Qualcomm KGSL 设备 |
 | Magisk 模块 | `adapt/magisk-d2r-bind/` —— 只做 bind mount，跟驱动无关，见 [§五](#五仍然必须保留的-magisk-模块) |
 | 数据包 | 8.8 GB 正版数据，**不在本仓库**（本仓库明确禁止分发游戏内容），自行从正版介质导入 |
 | 锁竖屏 | 转屏会让进程静默退出，见 [§七](#七已知限制) |
@@ -77,7 +78,7 @@
 .
 ├── README.md               本文件
 ├── UPSTREAM.md             上游来源、commit、以及「上游被改了什么」的对照
-├── THIRD-PARTY-NOTICES.md  第三方许可与出处（Turnip / AdrenoTools / Eden / Ryujinx / …）
+├── THIRD-PARTY-NOTICES.md  第三方许可与出处（PanVK / Turnip / AdrenoTools / Eden / Ryujinx / …）
 ├── LICENSE                 MIT 许可
 ├── upstream/               d2r-android 源码快照 + 本项目在它之上的全部改动
 ├── drivers/Qualcomm_840/  Adreno 840 驱动的**放置位**（二进制不随仓库分发，见目录内 README）

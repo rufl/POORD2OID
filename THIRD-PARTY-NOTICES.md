@@ -26,7 +26,7 @@
 
 ---
 
-## 二、随包分发的二进制（`upstream/dm/android/prebuilt/turnip/`）
+## 二、随包分发的 Vulkan 驱动
 
 ### Mesa Turnip
 
@@ -35,8 +35,17 @@
 - 构建：T30 Adreno 版本，作者 [@Mr_Purple_666](https://gitlab.freedesktop.org/mesa/mesa)，
   文件 `vulkan.purple.so`，版本 `26.3.0-T30-1.4.359`
 - 说明：**原样**放在 `upstream/dm/android/prebuilt/turnip/` 并附其 `meta.json`。
-  启动界面可以在「系统驱动 / 内置 Turnip」之间切。
+  启动界面仅在检测到 API 30+ 与 `/dev/kgsl-3d0` 时显示 Turnip；System Vulkan 始终是回退。
 - 许可文件：`upstream/dm/android/prebuilt/turnip/`（见 `meta.json` 指向的上游许可）
+
+### FristOneRR PanVK v3.7.0
+
+- 驱动发布：<https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0>
+- 源码：<https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source>
+- 文件：`upstream/dm/android/prebuilt/PanVK-FristOneRR-V.3.7.0.zip`，其中的 `libvulkan_panfrost.so` 由 `build.py` 固定 SHA-256 校验后打包。
+- 许可：MIT（ZIP 内 `LICENSE-Mesa.txt`；个别 Mesa 文件保留各自兼容的宽松许可头），构建时该许可也复制进 APK。
+- 限制：仅在 `/dev/mali0` 设备显示；上游标记为 non-conformant，属于实验驱动，不保证游戏兼容性或性能。
+
 
 ### AdrenoTools（`libadrenotools.so` / `libhook_impl.so` / `libmain_hook.so`）
 
