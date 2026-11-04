@@ -99,15 +99,15 @@ public final class D2RActivity extends NativeActivity {
     private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuFrameRateRow;
     private boolean overlayEnabled = true;
     private boolean controlsEnabled = true;
-    private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 | 0 auto / 1 high / 2 balanced / 3 performance
-    private static final int[] QUALITY_LEVELS = {-1, 0, 1, 2};   // 与 native 约定：-1 自动、0 高、1 平衡、2 性能 | the native contract
+    private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 / 4 超性能 | 0 auto / 1 high / 2 balanced / 3 performance / 4 ultra performance
+    private static final int[] QUALITY_LEVELS = {-1, 0, 1, 2, 3}; // 与 native 约定：-1 自动、0 高、1 平衡、2 性能、3 超性能 | the native contract
     // 帧率档：30 / 60 / 跟随屏幕（-1 = 跟随屏幕最高刷新率）。
-    // 默认上限为 60；显式保存的 30 / 跟随选择仍优先。设备支持时可手动选择跟随 120 Hz。
+    // 默认上限 30 帧；可在游戏内切换 60 或跟随屏幕。它是上限，不保证 GPU 忙时达到目标。
+    // Default cap: 30 fps; switch to 60 or follow the display in-game. This is a cap, not a promise under GPU load.
     // Frame-rate presets: 30 / 60 / follow the display maximum.
-    // Default to 60; saved 30/follow choices win. Choose follow manually to target 120 Hz when supported.
     private static final int[] PRESENT_HZ_VALUES = {30, 60, -1};
-    private int presentHzIndex = 1;
-    private static final String[] QUALITY_KEYS = {"dmAndroidMenuQualityAuto", "dmAndroidMenuQualityHigh", "dmAndroidMenuQualityBalanced", "dmAndroidMenuQualityPerformance"};
+    private int presentHzIndex = 0;
+    private static final String[] QUALITY_KEYS = {"dmAndroidMenuQualityAuto", "dmAndroidMenuQualityHigh", "dmAndroidMenuQualityBalanced", "dmAndroidMenuQualityPerformance", "dmAndroidMenuQualityUltra"};
     // 与启动界面同一套配色（那边是 GOLD/PARCHMENT），菜单里照用，视觉上是一家人。
     // The same palette as the launcher (GOLD/PARCHMENT there), so the menu looks like part of the same app.
     private static final int GOLD = 0xffe8c078;

@@ -98,7 +98,7 @@ public final class LauncherActivity extends Activity {
     // input_receipts, for instance) and has to survive a rewrite -- otherwise starting the game from the launcher
     // silently drops it. Measured once with input_receipts=1: the file said so, native read "unset", the HID
     // receipts were never produced, and the overwrite was the last thing found.
-    private static final String[] OWNED_KEYS = {"debug_overlay", "operation_mode", "resolution"};
+    private static final String[] OWNED_KEYS = {"debug_overlay", "operation_mode", "resolution", "present_hz"};
 
     // 游戏还活着时启动界面立刻让位。
     // 从桌面点图标回来时，安卓会在**游戏上面**再开一个启动界面（启动界面是本应用的入口活动），玩家看到的是启动界面、
@@ -720,6 +720,9 @@ public final class LauncherActivity extends Activity {
         content.append("# 由启动界面写入 | written by the launcher\n");
         content.append("debug_overlay=").append(overlaySwitch.isChecked() ? "1" : "0").append('\n');
         content.append("operation_mode=").append(handheld ? "handheld" : "console").append('\n');
+        // Cap fresh installs at 30 fps; preserve a frame-rate choice already made in the in-game menu.
+        String presentHz = LaunchSettings.read(configFile(), "present_hz");
+        content.append("present_hz=").append(presentHz == null ? "30" : presentHz).append('\n');
         // 跟随档位时不写这个键：native 语义里"省略"就是不改动，保持原版 16:9 常数。
         // "Follow profile" writes no key: omitting it means "leave it alone" to native, keeping the original 16:9 constants.
         if (resolutionIndex < 0) content.append("resolution=").append(customResolution).append('\n');

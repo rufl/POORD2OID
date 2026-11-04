@@ -20,6 +20,8 @@ uint64_t dm_nvn_frame_count(void) { return 0; }
 int dm_nvn_ruler_truth(void) { return 0; }
 int dm_ingame_now(void) { return 1; }
 int mtl_fps_target(void) { return 60; }   // 目标帧率（nvn_mtl.m）：单测里恒为 60，30 帧档的用例直接给 period_ms | target frame rate (nvn_mtl.m): always 60 in the unit test, and the 30 fps mode cases pass period_ms directly
+void nvn_present_hz_set(int hz) { (void)hz; }
+int nvn_present_hz(void) { return 60; }
 pthread_key_t g_keyres[2];                                   // 分辨率参数位（loader.c）的桩：没建键，取走 31 时不写线程槽 | stub for the resolution parameter slot (loader.c): no key created, so taking 31 does not write the thread slot
 uint64_t dm_game_res(int docked) { (void)docked; return 0; }  // 出图分辨率（dm_uiscreen.c）的桩 | stub for the render resolution (dm_uiscreen.c)
 void dm_uiscreen_res_reread(void) {}
@@ -79,6 +81,14 @@ static int s3_replay(int clustered) {   // clustered = 1：每 10 秒的慢帧�
         for (int i = 0; i < 600; i++) { int slow = clustered ? i < ns : (ns && i % every == 0 && i / every < ns); s3_one(slow ? (i % 2 ? 25.0 : 40.0) : F60); } }
     return s3_dm;
 }
+static void test_scale3d_presets(void) {
+    CHECK(scale3d_preset_target(0, 1.0f) == 1.0f, "quality preset: high keeps the configured scale");
+    CHECK(scale3d_preset_target(1, 1.0f) == 0.85f, "quality preset: balanced uses 0.85");
+    CHECK(scale3d_preset_target(2, 1.0f) == 0.70f, "quality preset: performance uses 0.70");
+    CHECK(scale3d_preset_target(3, 1.0f) == 0.50f, "quality preset: ultra performance uses 0.50");
+    CHECK(scale3d_preset_target(1, 0.70f) == 0.70f, "quality preset never exceeds the configured scale");
+    CHECK(scale3d_preset_target(9, 0.80f) == 0.80f, "unknown quality preset keeps the configured scale");
+}
 static void test_scale3d(void) {
     s3 = (scale3d_ctl){.max_level = 2}; s3_now = 1000 * S3_SEC;
     CHECK(s3_n(1200, F60) == 0, "动态比例：60 帧稳 20 秒 → 保持 0 级");
@@ -132,7 +142,7 @@ static void test_scale3d(void) {
     CHECK(a == 0 && b == 0, "动态比例：实玩第二段的慢帧序列（帧率 59+）不论散开还是挤在一起都不换级");
 }
 int main(void) {
-    test_scale3d();
+    test_scale3d_presets();
     unsetenv("DM_OE_SCRIPT"); reset();
     CHECK(empty(), "初始空队列：返回false且不改输出");
     dm_focus_set(1); dm_set_opmode(1); CHECK(empty(), "相同状态不发通知");

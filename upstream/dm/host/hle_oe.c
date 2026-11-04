@@ -198,17 +198,28 @@ static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, uint64_t now) {   // �
     }
     return c->level;
 }
-// 游戏内菜单固定档位：-1 = 自动（动态控制器照旧），0 高质量 / 1 平衡 / 2 性能。定档期间动态控制器不插手，
+// 游戏内菜单固定档位：-1 = 自动，0 高质量 / 1 平衡 / 2 性能 / 3 超性能。定档期间动态控制器不插手，
 // 否则它会把玩家选的档又按帧率降下去；切回自动它立刻恢复工作。
-// Menu-pinned level: -1 = automatic (the dynamic controller keeps working), 0 high / 1 balanced / 2 performance.
-// While pinned the dynamic controller stays out of the way, otherwise it would lower the level the player just
-// picked; back on automatic it resumes at once.
+// Menu-pinned level: -1 = automatic, 0 high / 1 balanced / 2 performance / 3 ultra performance.
+// While pinned, the dynamic controller stays out of the way; selecting automatic resumes it immediately.
 #define SCALE3D_BALANCED 0.85f
+#define SCALE3D_ULTRA 0.50f
+static float scale3d_preset_target(int preset, float configured) {
+    float target;
+    switch (preset) {
+        case 0: target = configured; break;
+        case 1: target = SCALE3D_BALANCED; break;
+        case 2: target = SCALE3D_MIN; break;
+        case 3: target = SCALE3D_ULTRA; break;
+        default: return configured;
+    }
+    return target > configured ? configured : target;
+}
 static _Atomic int g_scale3d_forced = -1;
 void dm_3d_scale_set_preset(int preset) {
-    if (preset < -1 || preset > 2) return;
+    if (preset < -1 || preset > 3) return;
     atomic_store(&g_scale3d_forced, preset);
-    LOG("3D 比例档位切到「%s」，下一拍生效", preset < 0 ? "自动" : preset == 0 ? "高质量" : preset == 1 ? "平衡" : "性能");
+    LOG("3D 比例档位切到「%s」，下一拍生效", preset < 0 ? "自动" : preset == 0 ? "高质量" : preset == 1 ? "平衡" : preset == 2 ? "性能" : "超性能");
 }
 // 前端可改的出图节拍（帧率目标）：>0 固定帧率，<0 跟随屏幕最高刷新率。
 // 运行中可改，下一次出图生效：出图周期、窗口的刷新率请求、3D 比例控制的目标周期一起跟着变。
@@ -261,7 +272,7 @@ static void scale3d_tick(void) {
     }
     int lv = atomic_load(&g_scale3d_level);   // 动态级：0 = 配置值，1 = 0.72，2 = 0.70（都不高于配置值） | dynamic level: 0 = configured value, 1 = 0.72, 2 = 0.70 (none higher than the configured value)
     int forced = atomic_load(&g_scale3d_forced);   // 菜单定档时以定档值为准，动态级不参与 | a menu-pinned level wins over the dynamic one
-    float dyn = forced == 0 ? want_cfg : forced == 1 ? SCALE3D_BALANCED : forced == 2 ? SCALE3D_MIN : lv == 0 ? want_cfg : lv == 1 ? SCALE3D_MID : SCALE3D_MIN; if (dyn > want_cfg) dyn = want_cfg;
+    float dyn = forced >= 0 ? scale3d_preset_target(forced, want_cfg) : lv == 0 ? want_cfg : lv == 1 ? SCALE3D_MID : SCALE3D_MIN; if (dyn > want_cfg) dyn = want_cfg;
     float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
     if (want == cur || !main || dm_nvn_frame_count() < 30) return;
     uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;

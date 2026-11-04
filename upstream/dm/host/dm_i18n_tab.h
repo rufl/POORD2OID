@@ -395,6 +395,7 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidMenuQualityHigh", "高质量", "High" },
     { "dmAndroidMenuQualityBalanced", "平衡", "Balanced" },
     { "dmAndroidMenuQualityPerformance", "性能", "Performance" },
+    { "dmAndroidMenuQualityUltra", "超性能（3D 0.50）", "Ultra performance (3D 0.50)" },
     { "dmAndroidSaveExport", "导出存档", "Export save" },
     { "dmAndroidSaveImport", "导入存档", "Import save" },
     { "dmAndroidSaveExported", "已导出 %d 个文件", "Exported %d files" },
