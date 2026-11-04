@@ -625,3 +625,29 @@ BC 回退上传会累计 CPU 解排布/解码墙钟耗时及压缩/解码后字�
 
 构建/安装核验（2026-11-03）：`build.py --game-run --version v0.6.63` 构建成功，`versionCode=663`。首次构建使用的默认签名被 Android 拒绝；未卸载、未清除数据。改用匹配的 `apk/d2r-debug.keystore` 重建后，`adb install -r` 从 0.6.62 原位升级成功。安装后核对版本为 663，且 `files/d2r-package` 与 `files/save` 仍存在。APK 已通过 Tailnet 分享：`http://100.86.44.23:8811/D2R-Xiaomi-11T-English-0.6.63.apk`（HTTP 200；SHA-256 `d496bf85360152ce95dd2f6cd91d480b79c5e63b4ef8b2a3851c3170e125d574`）。
 `LauncherActivity` 启动请求已接受，但唤醒手机后仍停留在锁屏，应用在锁屏后保持停止状态。因此尚未进入游戏，也未实测升级后的 Vulkan/ADPF/BC 诊断；没有新的 FPS 或温度数据，不宣称 Mali 性能提升。
+
+## Xiaomi 11T：PanVK r8 安装与加载验证（2026-11-03）
+
+使用已安装应用匹配的 `apk/d2r-debug.keystore` 构建 APK `0.6.68`（`versionCode=668`）；`adb install -r` 成功。`files/d2r-package` 与 `files/save` 仍存在，启动器保存的选择仍为 `panvk`。
+
+APK 同时保留 PanVK r8、System Vulkan 与 Turnip。以应用 UID 运行的 PanVK 驱动属性探针使用与已打包资产相同 SHA-256 的 r8 ICD，报告 Mali-G77 MC9、driver ID 20、Vulkan 1.3.363、subgroup 16；instance/device/queue 初始化与 `vkDeviceWaitIdle` 通过。独立 System Vulkan 对照也通过（driver ID 9、Vulkan 1.1.177）。System 显式回退保留，未改客体同步。
+
+尝试唤醒后手机仍处于 Doze、屏幕关闭，无法进入交互式 D2R 场景；因此没有测量 surface/present 路径或游戏 FPS。JimVulkan 报告的 G77 2000 次小 draw 微基准（6.55 ms 降至 2.2 ms）是上游数据，不是 D2R 实测；目前不宣称游戏内帧率提升。
+
+APK：`http://100.86.44.23:8811/D2R-Xiaomi-11T-Mali-G77-PanVK-r8-0.6.68.apk`（HTTP 200，完整下载 SHA-256：`29004400a7e66b3a4b1b1dac8d315f8af435d64baeb4759efc473811570f99f7`）。
+
+
+## Xiaomi 11T：PanVK 选择器与 Android surface 复测（2026-11-04）
+
+使用已安装应用匹配的签名密钥构建 APK `0.6.69`（`versionCode=669`）并原位覆盖安装；已导入的游戏文件与存档仍在。真机 UI 测试确认驱动选择器能在 PanVK 和 System Vulkan 间切换，强制停止并重启后仍保存为 PanVK。当前配置为 `backend=panvk`、`require_custom=1`。
+
+选择 PanVK 后启动游戏，在渲染前中止：
+
+```text
+selected instance has no vkCreateAndroidSurfaceKHR
+required driver/subgroup policy failed
+```
+
+以应用 UID 对安装版 ICD 运行探针，枚举到 14 个 instance extension（含 `VK_KHR_surface` 和 `VK_KHR_android_surface`）。同时启用两个扩展后 instance 创建成功，但 `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` 返回 NULL；`vkDestroySurfaceKHR` 与 `vkGetPhysicalDeviceSurfaceSupportKHR` 非 NULL。因此选择器与 linker namespace 加载正常，问题是 direct-ICD 路径虽广告 Android surface 扩展，却没有可用的创建入口。`require_custom=1` 使 PanVK 失败时不会静默改用 System Vulkan。
+
+没有渲染出游戏画面，也没有 FPS 测量。System Vulkan 仍可选择，但本轮未验证该模式下的游戏实战。必须先实现 Android surface/swapchain/present 支持，再验证 PanVK；当前它在此设备上不可玩。

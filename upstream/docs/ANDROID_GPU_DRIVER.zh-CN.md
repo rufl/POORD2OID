@@ -244,8 +244,50 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 ## 三种 Vulkan 后端（System / PanVK / Turnip）
 
-启动器保留三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 FristOneRR PanVK v3.7.0，仅在存在 `/dev/mali0` 的 Mali kbase 设备提供；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 的 KGSL 设备提供。因此 Xiaomi 11T（Mali-G77 MC9）上应能选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
+启动器提供三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 JimVulkan PanVK r8，仅在 Android API 31+ 且存在 `/dev/mali0` 的 Mali kbase 设备显示；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 时显示。因此 Xiaomi 11T（Mali-G77 MC9）可选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
 
-PanVK 包来自 [FristOneRR-Panvk-Driver v3.7.0](https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0)，构建时固定校验 ZIP 与 `.so` 的 SHA-256，并把 Mesa 许可放入 APK。启动器把驱动复制到应用内部可执行目录；资产摘要变化时重新复制，避免升级 APK 后继续用旧的同尺寸库。native 端用 `vk_icdNegotiateLoaderICDInterfaceVersion` / `vk_icdGetInstanceProcAddr` 加载 PanVK，并要求最终 `VkPhysicalDeviceDriverProperties.driverID` 确认为 `VK_DRIVER_ID_MESA_PANVK`。PanVK 和 Turnip 均以 `require_custom=1` 严格启动：加载、身份或游戏 shader subgroup profile 校验失败时明确报错，不会暗中切回系统；选择 `system` 才是显式回退。
+PanVK 包来自 [JimVulkan mali-panvk v1.4.0 / r8](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.4.0)，构建固定校验 ZIP 与 `.so` 的 SHA-256，并将上游 `NOTICE.txt` 随 APK 分发。PanVK 只可在 API 31+ 使用；启动器与 native loader 都拒绝更旧系统。驱动复制仍通过 SHA-256 sidecar 检测升级。native 端要求最终 `VkPhysicalDeviceDriverProperties.driverID` 为 `VK_DRIVER_ID_MESA_PANVK`。PanVK 与 Turnip 继续 `require_custom=1` 严格启动；失败时明确报错，不暗中切换。`system` 仍是玩家主动选择的回退。
 
-2026-11-03 构建并安装后的 App UID fixture：系统驱动（ID 9）与 PanVK（ID 20）均通过 instance、physical-device、device、queue 与 `vkDeviceWaitIdle` 检查；PanVK 实际报告 Mali-G77 MC9、API 1.3、subgroup 16。PanVK 的 subgroup16 游戏 profile 检查通过；已导入数据包中的 profile 也是16；profile64 按预期因与物理 subgroup16 不匹配而拒绝。PanVK 完整 Vulkan 回归组件尚未通过：在 `tests/vulkan_test.c:52` 的 1 秒 `mtl_wait` 断言中 abort。系统驱动回归组件也未全通过，在之后的 `uniform_arena_reference_test` 断言中 abort。因此只确认两个 loader/device-init 路径；**没有验证 Android surface/swapchain present 或真实 D2R 进入实战**。上游把 PanVK 标为 non-conformant，仍属实验选项，不承诺兼容性或性能。构建可用 `--no-panvk` / `--no-turnip` 显式排除对应包；默认 APK 打包二者。
+历史记录：以下 2026-11-03 的设备级验证针对旧版 FristOneRR v3.7.0，不代表当前 JimVulkan r8。
+
+2026-11-03 构建后的 `run-as` App UID fixture（不代表 Java Activity 的 classloader namespace）：系统驱动（ID 9）与 PanVK（ID 20）均通过 instance、physical-device、device、queue 与 `vkDeviceWaitIdle` 检查；PanVK 实际报告 Mali-G77 MC9、API 1.3、subgroup 16。PanVK 的 subgroup16 游戏 profile 检查通过；已导入数据包中的 profile 也是16；profile64 按预期因与物理 subgroup16 不匹配而拒绝。PanVK 完整 Vulkan 回归组件尚未通过：在 `tests/vulkan_test.c:52` 的 1 秒 `mtl_wait` 断言中 abort。系统驱动回归组件也未全通过，在之后的 `uniform_arena_reference_test` 断言中 abort。因此只确认两个 loader/device-init 路径；**没有验证 Android surface/swapchain present 或真实 D2R 进入实战**。上游把 PanVK 标为 non-conformant，仍属实验选项，不承诺兼容性或性能。构建可用 `--no-panvk` / `--no-turnip` 显式排除对应包；默认 APK 打包二者。
+### PanVK Android linker namespace fix and Xiaomi 11T smoke (2026-11-03)
+
+The installed app log exposed the actual launch failure: `PanVK dlopen: library "libhardware.so" not found ... in namespace clns-4`. The file exists on the device but is not in the Android app namespace's public-library list. This was not a PanVK checksum or Mali-G77 detection failure. PanVK also has a Termux-specific `RUNPATH`; bundling `libhardware.so` would be an unsafe, non-portable workaround.
+
+The APK now includes `libpanvk_namespace.so`, built with the pinned `liblinkernsbypass` source. It creates a shared linker namespace rooted at the app-private PanVK directory, links that namespace to Android's default system libraries, then loads the PanVK ICD by basename. It does not copy private Android libraries into the APK. Strict PanVK selection and the explicit System fallback remain unchanged.
+
+Validation on the Xiaomi 11T: APK `0.6.67` installed over the existing app with its matching signing key, preserving app data. The strict PanVK `gpu-driver-properties` smoke, run as the app UID, reported ICD interface 7, `Mali-G77 MC9`, driver ID 20, Vulkan 1.3.366, subgroup 16, and completed instance/device/queue initialization plus `vkDeviceWaitIdle` (`GPU driver properties and dispatch PASS`).
+The same app-UID probe with no custom-driver config selected the system driver (ID 9) and also passed device creation and idle.
+
+This smoke validates ICD loading and device initialization, not Android surface/swapchain/presentation or D2R gameplay. The phone was still at the keyguard during this check; the saved launcher selection remains `system`. Do not treat PanVK gameplay compatibility as verified yet.
+
+### PanVK Android linker namespace 修复与 Xiaomi 11T 冒烟测试（2026-11-03）
+
+安装版日志确认启动失败点为：`PanVK dlopen: library "libhardware.so" not found ... in namespace clns-4`。该库存在于设备上，但不在 Android 应用 linker namespace 的公开库列表内；这不是 PanVK 校验和或 Mali-G77 检测失败。PanVK 还带有 Termux 专用 `RUNPATH`；把 `libhardware.so` 复制进 APK 既不安全也不具备可移植性。
+
+APK 现包含使用固定版本 `liblinkernsbypass` 构建的 `libpanvk_namespace.so`：它以应用私有 PanVK 目录创建共享 linker namespace，再链接到 Android 默认系统库并按 basename 加载 PanVK ICD；不会把 Android 私有库复制进 APK。PanVK 仍严格启动，System 仍是显式回退。
+
+Xiaomi 11T 验证：`0.6.67` APK 使用已安装应用匹配的签名密钥覆盖安装，保留应用数据。以应用 UID 运行的严格 PanVK `gpu-driver-properties` 冒烟测试报告 ICD interface 7、`Mali-G77 MC9`、driver ID 20、Vulkan 1.3.366、subgroup 16；instance/device/queue 初始化和 `vkDeviceWaitIdle` 均完成（`GPU driver properties and dispatch PASS`）。
+同一 app-UID 探针在不设置自定义驱动配置时选择系统驱动（ID 9），device create 与 idle 也通过。
+
+此测试只验证 ICD 加载与设备初始化，不验证 Android surface/swapchain/present 或 D2R 实战。测试时手机仍在锁屏界面；启动器保存的选择仍为 `system`，因此不能宣称 PanVK 游戏兼容性已验证。
+
+### JimVulkan PanVK r8 performance update (2026-11-03)
+
+The FristOneRR v3.7.0 binary previously bundled here was replaced by JimVulkan's Mesa 27 r8 build. Its release notes specifically report a Mali-G77 2,000-small-draw benchmark improving from 6.55 ms to 2.2 ms (Arm's driver: 2.18 ms), matching the draw-heavy pattern in the captured D2R frames. This is an upstream microbenchmark, not a measured D2R/Xiaomi 11T result.
+
+The APK still exposes the same three choices—System, PanVK, Turnip—and keeps PanVK strict; no queue waits or guest synchronization were weakened. PanVK is now gated to Android API 31+ because that is the packaged ICD's declared minimum.
+
+### Xiaomi 11T 上 PanVK r8 的实际启动结果（2026-11-04）
+
+APK `0.6.69` 真机测试确认驱动选择器可在 PanVK 与 System Vulkan 间切换，强制停止并重启后仍保存为 PanVK。点击启动后，游戏在进入渲染前中止：
+
+```text
+selected instance has no vkCreateAndroidSurfaceKHR
+required driver/subgroup policy failed
+```
+
+以应用 UID 对安装版 ICD 运行独立探针：枚举到 14 个 instance extension（包含 `VK_KHR_surface` 和 `VK_KHR_android_surface`）；同时启用这两个扩展后 `vkCreateInstance` 成功，但 `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` 返回 NULL。`vkDestroySurfaceKHR` 与 `vkGetPhysicalDeviceSurfaceSupportKHR` 非 NULL。因此这是 PanVK Android surface 入口缺失，不是驱动下拉框选错，也不是 linker namespace 未加载。仅列出 Android surface 扩展并不代表实现了 surface 创建。
+
+启动器对 PanVK 使用 `require_custom=1`，所以不会静默换到系统驱动；测试没有验证 System 模式能否进入游戏，也没有实战 FPS 数据。当前 PanVK 在此设备上不能用于游戏；必须补齐真实 Android window/surface/swapchain/present 支持后再重新验证。

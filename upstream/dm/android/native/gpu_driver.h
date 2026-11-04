@@ -19,7 +19,7 @@ typedef enum dm_vk_backend {
 } dm_vk_backend;
 
 typedef struct dm_vk_driver {
-    void *library, *adrenotools;
+    void *library, *adrenotools, *panvk_namespace;
     PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
 #define DM_VK_FIELD(name) PFN_##name name;
     DM_VK_GLOBAL_FUNCTIONS(DM_VK_FIELD)

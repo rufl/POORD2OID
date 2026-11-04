@@ -54,8 +54,8 @@ def run(args, **kwargs):
     subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
-PANVK_ARCHIVE_SHA256 = "6e9129a3b9db5204c315df2ba5836fb88dea063686a0d11426de992e9e2409c5"
-PANVK_LIBRARY_SHA256 = "e6e92930cc70f3fae6d7157c5de71598f27b4b1fdfce89504f6c8b6aeda12801"
+PANVK_ARCHIVE_SHA256 = "6ae8d1a22506ed9da26706f9f1ddf430f85ed6778c4ac3c9b9c70250413e51f2"
+PANVK_LIBRARY_SHA256 = "fffd983d79f2a11aa4fc1f18c45b87e5f072be49b56fb466bca07a3a6838cc3e"
 
 
 def sha256_file(path):
@@ -77,7 +77,9 @@ def package_panvk(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if metadata.get("name") != "PanVK-FristOneRR-V.3.7.0" or metadata.get("libraryName") != "libvulkan_panfrost.so":
+            if (metadata.get("name") != "PanVK Mali Bifrost/Valhall (kbase) (Mesa 27.0.0-devel-d896b0a)"
+                    or metadata.get("packageVersion") != "1"
+                    or metadata.get("libraryName") != "libvulkan_panfrost.so"):
                 sys.exit("Unexpected PanVK package metadata")
             with archive.open("libvulkan_panfrost.so") as source, temporary.open("wb") as target:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -85,13 +87,15 @@ def package_panvk(archive_path, assets, licenses):
             if sha256_file(temporary) != PANVK_LIBRARY_SHA256:
                 sys.exit("PanVK driver checksum mismatch")
             (panvk_assets / "driver.sha256").write_text(PANVK_LIBRARY_SHA256 + "\n", encoding="ascii")
-            (panvk_assets / "LICENSE-Mesa.txt").write_bytes(archive.read("LICENSE-Mesa.txt"))
+            (panvk_assets / "NOTICE.txt").write_bytes(archive.read("NOTICE.txt"))
+            (panvk_assets / "LICENSE-Mesa.txt").unlink(missing_ok=True)
     except (OSError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         temporary.unlink(missing_ok=True)
         sys.exit("Invalid PanVK package: " + str(error))
     temporary.replace(panvk_assets / "libvulkan_panfrost.so")
-    shutil.copyfile(panvk_assets / "LICENSE-Mesa.txt", licenses / "PanVK-FristOneRR-v3.7.0.txt")
-    print("PanVK FristOneRR v3.7.0: verified and bundled", flush=True)
+    shutil.copyfile(panvk_assets / "NOTICE.txt", licenses / "PanVK-JimVulkan-r8.txt")
+    (licenses / "PanVK-FristOneRR-v3.7.0.txt").unlink(missing_ok=True)
+    print("PanVK JimVulkan r8 ICD: verified and bundled", flush=True)
 
 
 
@@ -153,8 +157,8 @@ def main():
                         help="随 APK 分发的 Turnip 驱动；默认用仓库里的 dm/android/prebuilt/turnip/")
     parser.add_argument("--no-turnip", action="store_true",
                         help="不出内置 Turnip 驱动")
-    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/PanVK-FristOneRR-V.3.7.0.zip",
-                        help="官方 FristOneRR PanVK 包；默认要求通过仓库固定SHA256验证")
+    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/mali-panvk-27.0.0-devel-d896b0a.zip",
+                        help="pinned JimVulkan r8 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
     args = parser.parse_args()
@@ -229,13 +233,10 @@ def main():
         shutil.copyfile(artwork, assets / artwork.name)
     for override in sorted((ROOT / "local").glob("launcher-background.*")):
         shutil.copyfile(override, assets / override.name)
-    # Turnip ships for Qualcomm KGSL; FristOneRR PanVK ships for Mali kbase. The launcher exposes each only when its
-    # matching device node exists and copies it into internal storage before writing gpu-driver.conf. Sidecar
-    # SHA-256 markers invalidate stale same-size copies after an APK update. Turnip can be omitted explicitly;
-    # PanVK's default package is checksum-pinned, and --no-panvk is the explicit opt-out.
-    # Turnip 面向 Qualcomm KGSL，FristOneRR PanVK 面向 Mali kbase。启动器只在匹配设备节点存在时显示对应选项，
-    # 并在写 gpu-driver.conf 前复制到应用内部目录。sidecar SHA-256 标记可在 APK 更新后淘汰同尺寸旧库。
-    # Turnip 可显式省略；PanVK 默认固定校验打包，--no-panvk 才是明确退出。
+    # Turnip ships for Qualcomm KGSL; JimVulkan PanVK r8 remains an experimental Mali-kbase bundle.
+    # The app-UID probe enumerates VK_KHR_android_surface but returns no vkCreateAndroidSurfaceKHR, so the current
+    # Xiaomi 11T game launch aborts before rendering; bundle presence is not an Android WSI compatibility claim.
+    # The launcher gates PanVK on API 31+ and /dev/mali0. --no-panvk is the explicit opt-out.
     if args.no_turnip:
         shutil.rmtree(assets / "turnip", ignore_errors=True)
         print("Turnip driver: excluded (--no-turnip)", flush=True)
@@ -251,6 +252,7 @@ def main():
 
     if args.no_panvk:
         shutil.rmtree(assets / "panvk", ignore_errors=True)
+        (licenses / "PanVK-JimVulkan-r8.txt").unlink(missing_ok=True)
         (licenses / "PanVK-FristOneRR-v3.7.0.txt").unlink(missing_ok=True)
         print("PanVK driver: excluded (--no-panvk)", flush=True)
     else:

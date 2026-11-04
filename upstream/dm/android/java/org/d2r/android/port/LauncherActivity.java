@@ -81,7 +81,7 @@ public final class LauncherActivity extends Activity {
     // 1280x720 and 1600x900 are there for GPU-bound devices: one step down in resolution is a real step up in frame
     // rate (measured 1080p -> 720p: about 10 -> 16 fps).
     private static final String[] RESOLUTION_PRESETS = {"", "1280x720", "1600x900", "1920x1080", "2560x1440"};
-    // Keep stock Vulkan, FristOneRR PanVK for Mali/kbase, and Turnip for Qualcomm KGSL devices.
+    // Keep stock Vulkan, JimVulkan PanVK r8 for Mali/kbase (Android 12+), and Turnip for Qualcomm KGSL.
     private static final String[] DRIVER_STATES = {"system", "panvk", "turnip"};
     private static final String TURNIP_ASSET = "turnip/vulkan.purple.so";
     private static final String PANVK_ASSET = "panvk/libvulkan_panfrost.so";
@@ -212,7 +212,8 @@ public final class LauncherActivity extends Activity {
         }
     }
     private boolean panvkAvailable() {
-        return panvkBundled() && new File("/dev/mali0").exists();
+        return android.os.Build.VERSION.SDK_INT >= 31
+            && panvkBundled() && new File("/dev/mali0").exists();
     }
     private boolean driverAvailable(String driver) {
         if (driver.equals("system")) return true;

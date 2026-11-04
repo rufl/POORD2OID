@@ -17,7 +17,7 @@
 | **[sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android)** | 把 d2r-mobile 移植到安卓的版本。**本仓库的 `upstream/` 就是它的快照**（`5d8e322`），安卓端的手柄接管、帧率档、崩溃落盘等改动在它之上 | MIT |
 | **[Eden](https://git.eden-emu.dev/eden-emu/eden)** | Switch 模拟器。**只作参考**：它的异步调度、完成序号、上传缓冲池、Android 驱动装载是本项目 Vulkan 后端的设计参照。**它的着色器翻译是 GPL-3.0，没有并入本 MIT 项目** | GPL-3.0（仅参考） |
 | **[Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa)** | 随包分发的开源 Vulkan 驱动（T30 Adreno 构建，作者 [@Mr_Purple_666](https://gitlab.freedesktop.org/mesa/mesa)），MIT；仅支持 Qualcomm KGSL 设备 | MIT |
-| **[FristOneRR PanVK](https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0)** | Mesa-based Mali kbase Vulkan 驱动，MIT；作为实验选项随通用 Android APK 分发 | MIT |
+| **[JimVulkan PanVK r8](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.4.0)** | Experimental Mesa 27 Mali kbase Vulkan driver. On Xiaomi 11T, APK 0.6.69 aborts before rendering because `vkCreateAndroidSurfaceKHR` is missing; the upstream G77 draw benchmark is not D2R performance evidence | MIT + bundled notices |
 
 **没有这两个仓库，本项目不会存在。** 再次致谢 jhaizhou 与 sydeEvans。
 

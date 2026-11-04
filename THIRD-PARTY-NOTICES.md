@@ -38,13 +38,12 @@
   启动界面仅在检测到 API 30+ 与 `/dev/kgsl-3d0` 时显示 Turnip；System Vulkan 始终是回退。
 - 许可文件：`upstream/dm/android/prebuilt/turnip/`（见 `meta.json` 指向的上游许可）
 
-### FristOneRR PanVK v3.7.0
+### JimVulkan PanVK r8 (Mesa 27.0.0-devel)
 
-- 驱动发布：<https://github.com/FristOneRR/FristOneRR-Panvk-Driver/releases/tag/v3.7.0>
-- 源码：<https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source>
-- 文件：`upstream/dm/android/prebuilt/PanVK-FristOneRR-V.3.7.0.zip`，其中的 `libvulkan_panfrost.so` 由 `build.py` 固定 SHA-256 校验后打包。
-- 许可：MIT（ZIP 内 `LICENSE-Mesa.txt`；个别 Mesa 文件保留各自兼容的宽松许可头），构建时该许可也复制进 APK。
-- 限制：仅在 `/dev/mali0` 设备显示；上游标记为 non-conformant，属于实验驱动，不保证游戏兼容性或性能。
+- Release and source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.4.0>
+- File: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-d896b0a.zip`; `build.py` pins the archive and `libvulkan_panfrost.so` SHA-256.
+- License: MIT for the PanVK changes; the packaged `NOTICE.txt` carries Mesa and all bundled third-party notices/license texts and is included in the APK.
+- Status: Mali kbase / Android API 31+ experimental bundle. On Xiaomi 11T, APK 0.6.69's app-UID probe found `vkCreateAndroidSurfaceKHR` missing and the game aborts before rendering. The upstream G77 microbenchmark is not a D2R FPS result.
 
 
 ### AdrenoTools（`libadrenotools.so` / `libhook_impl.so` / `libmain_hook.so`）

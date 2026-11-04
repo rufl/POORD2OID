@@ -2,6 +2,7 @@
 // Optional Turnip/PanVK loading and unified Vulkan dispatch. System by default; never change another app's configuration.
 #define _GNU_SOURCE
 #include "gpu_driver.h"
+#include "gpu_driver_policy.h"
 #include <vulkan/vk_icd.h>
 #include <adrenotools/driver.h>
 #include <ctype.h>
@@ -19,6 +20,7 @@
 #endif
 
 typedef void *(*adreno_open_fn)(int,int,const char *,const char *,const char *,const char *,const char *,void **);
+typedef void *(*panvk_namespace_open_fn)(const char *,const char *,char *,size_t);
 static void driver_log(const char *format,...) {
     char text[1536];va_list args;va_start(args,format);vsnprintf(text,sizeof text,format,args);va_end(args);
     fprintf(stderr,"[vulkan-loader] %s\n",text);
@@ -137,11 +139,18 @@ static int load_globals(dm_vk_driver *d,int panvk_icd) {
     return 1;
 }
 static int open_panvk(dm_vk_driver *d) {
-    char path[1200];
-    if(snprintf(path,sizeof path,"%s%s",d->driver_directory,d->driver_name)>=(int)sizeof path)
-        return driver_error(d,"PanVK library path is too long");
-    d->library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
-    if(!d->library){const char *error=dlerror();return driver_error(d,"PanVK dlopen: %s",error?error:"open failed");}
+    char resolved[PATH_MAX],helper_path[PATH_MAX],namespace_error[512]={0};
+    const char *library_directory=getenv("DM_ANDROID_LIBDIR");
+    if(!library_directory||!realpath(library_directory,resolved))
+        return driver_error(d,"PanVK namespace loader directory: %s",library_directory?strerror(errno):"DM_ANDROID_LIBDIR is unset");
+    if(snprintf(helper_path,sizeof helper_path,"%s/libpanvk_namespace.so",resolved)>=(int)sizeof helper_path)
+        return driver_error(d,"PanVK namespace loader path is too long");
+    d->panvk_namespace=dlopen(helper_path,RTLD_NOW|RTLD_LOCAL);
+    if(!d->panvk_namespace){const char *error=dlerror();return driver_error(d,"PanVK namespace loader: %s",error?error:"open failed");}
+    panvk_namespace_open_fn open=(panvk_namespace_open_fn)dlsym(d->panvk_namespace,"dm_panvk_namespace_open");
+    if(!open)return driver_error(d,"PanVK namespace loader entrypoint is missing");
+    d->library=open(d->driver_directory,d->driver_name,namespace_error,sizeof namespace_error);
+    if(!d->library)return driver_error(d,"PanVK namespace dlopen: %s",namespace_error[0]?namespace_error:"open failed");
     PFN_vk_icdNegotiateLoaderICDInterfaceVersion negotiate=
         (PFN_vk_icdNegotiateLoaderICDInterfaceVersion)dlsym(d->library,"vk_icdNegotiateLoaderICDInterfaceVersion");
     if(!negotiate)return driver_error(d,"PanVK loader negotiation entrypoint is missing");
@@ -178,16 +187,24 @@ static int open_system(dm_vk_driver *d) {
     if(!load_globals(d,0))return 0;
     driver_log("requested=%s selected=system",d->requested_custom?backend_name(d->backend):"system");return 1;
 }
+static int fallback_to_system(dm_vk_driver *d) {
+    if(!dm_vk_driver_prepare_system_fallback(d->requested_custom,d->require_custom,
+            &d->requested_subgroup_size,&d->subgroup_policy_required))return 0;
+    // Explicit subgroup sizing is custom-driver-specific. Shader loading validates the cache against the selected
+    // system GPU's physical subgroup before any game shader is used.
+    driver_log("custom driver unavailable; selecting system Vulkan and validating the shader profile on that GPU");
+    return open_system(d);
+}
 int dm_vk_driver_open(dm_vk_driver *d) {
     memset(d,0,sizeof *d);
     if(!configure(d)){
         driver_log("custom initialization failed: %s",dm_vk_driver_error(d));
-        if(d->require_custom||d->subgroup_policy_required)return 0;return open_system(d);
+        return fallback_to_system(d);
     }
     if(!d->requested_custom)return open_system(d);
 #ifdef __ANDROID__
     if(d->backend==DM_VK_BACKEND_PANVK){
-        if(android_get_device_api_level()<28)driver_error(d,"PanVK requires Android API28+");
+        if(android_get_device_api_level()<31)driver_error(d,"PanVK r8 requires Android API31+");
         else if(access("/dev/mali0",F_OK))driver_error(d,"PanVK requires the Mali kbase device /dev/mali0");
         else if(open_panvk(d))return 1;
     }else if(d->backend==DM_VK_BACKEND_TURNIP){
@@ -210,8 +227,8 @@ int dm_vk_driver_open(dm_vk_driver *d) {
 #endif
     char reason[sizeof d->error];snprintf(reason,sizeof reason,"%s",dm_vk_driver_error(d));driver_log("custom initialization failed: %s",reason);
     if(d->library){dlclose(d->library);d->library=NULL;}
-    if(d->require_custom||d->subgroup_policy_required)return 0;
-    return open_system(d);
+    if(d->panvk_namespace){dlclose(d->panvk_namespace);d->panvk_namespace=NULL;}
+    return fallback_to_system(d);
 }
 static int is_wsi_function(const char *name) {
     return strstr(name,"Surface")!=NULL||strstr(name,"Swapchain")!=NULL||!strcmp(name,"vkAcquireNextImageKHR")||!strcmp(name,"vkQueuePresentKHR");
@@ -349,9 +366,11 @@ int dm_vk_driver_validate(dm_vk_driver *d,VkPhysicalDevice physical,const char *
 int dm_vk_driver_fallback(dm_vk_driver *d,const char *reason) {
     if(!d->using_custom)return 0;
     char message[512];snprintf(message,sizeof message,"%s",reason?reason:dm_vk_driver_error(d));driver_log("custom initialization failed: %s",message);
-    if(d->require_custom||d->subgroup_policy_required){driver_error(d,"required driver/subgroup policy failed: %s",message);return 0;}
-    if(d->library){dlclose(d->library);d->library=NULL;}return open_system(d);
+    if(d->require_custom){driver_error(d,"required driver policy failed: %s",message);return 0;}
+    if(d->library){dlclose(d->library);d->library=NULL;}
+    if(d->panvk_namespace){dlclose(d->panvk_namespace);d->panvk_namespace=NULL;}
+    return fallback_to_system(d);
 }
 void dm_vk_driver_close(dm_vk_driver *d) {
-    reset_subgroup_policy(d);if(d->library)dlclose(d->library);if(d->adrenotools)dlclose(d->adrenotools);memset(d,0,sizeof *d);
+    reset_subgroup_policy(d);if(d->library)dlclose(d->library);if(d->panvk_namespace)dlclose(d->panvk_namespace);if(d->adrenotools)dlclose(d->adrenotools);memset(d,0,sizeof *d);
 }

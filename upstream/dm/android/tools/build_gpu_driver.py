@@ -80,7 +80,8 @@ def build_locked(output):
     sources = [source / "src/driver.cpp", source / "src/bcenabler.cpp",
                linker / "android_linker_ns.cpp", linker / "elf_soname_patcher.cpp",
                source / "src/hook/hook_impl.cpp", source / "src/hook/main_hook.c",
-               source / "src/hook/file_redirect_hook.c", source / "src/hook/gsl_alloc_hook.c"]
+               source / "src/hook/file_redirect_hook.c", source / "src/hook/gsl_alloc_hook.c",
+               Path(__file__).with_name("panvk_namespace_loader.cpp")]
 
     def compile_file(path):
         obj = output / (path.stem + ".o")
@@ -120,6 +121,7 @@ def build_locked(output):
         "main_hook": [by_name["main_hook"]],
         "file_redirect_hook": [by_name["file_redirect_hook"]],
         "gsl_alloc_hook": [by_name["gsl_alloc_hook"]],
+        "panvk_namespace": [by_name["panvk_namespace_loader"], archive],
     }
     for name, inputs in targets.items():
         library = output / ("lib" + name + ".so")
@@ -128,12 +130,12 @@ def build_locked(output):
                    *map(str, inputs)]
         if name == "adrenotools":
             command.append("-Wl,--exclude-libs,liblinkernsbypass.a")
-        if name not in ("adrenotools", "hook_impl"):
+        if name in ("main_hook", "file_redirect_hook", "gsl_alloc_hook"):
             command += ["-Wl,-z,global", "-L", str(output), "-lhook_impl"]
         command += ["-landroid", "-ldl", "-llog", "-lm", "-o", str(library)]
         recorded = json.dumps(command)
         stamp = library.with_suffix(".cmd")
-        dependencies = inputs + ([output / "libhook_impl.so"] if name not in ("adrenotools", "hook_impl") else [])
+        dependencies = inputs + ([output / "libhook_impl.so"] if name in ("main_hook", "file_redirect_hook", "gsl_alloc_hook") else [])
         if not (library.exists() and stamp.exists() and stamp.read_text() == recorded
                 and all(p.stat().st_mtime <= library.stat().st_mtime for p in dependencies)):
             result = subprocess.run(command, capture_output=True, text=True)

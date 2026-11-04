@@ -321,3 +321,30 @@ BC fallback uploads now accumulate CPU deswizzle/decode wall time and compressed
 
 Build/install verification (2026-11-03): `build.py --game-run --version v0.6.63` completed and produced versionCode 663. The first build's default signing key was rejected by Android; no uninstall or data clear was done. Rebuilt with the matching `apk/d2r-debug.keystore`, then `adb install -r` succeeded over 0.6.62. Post-install checks report versionCode 663 and confirm `files/d2r-package` and `files/save` remain present. The APK is shared at `http://100.86.44.23:8811/D2R-Xiaomi-11T-English-0.6.63.apk` (HTTP 200; SHA-256 `d496bf85360152ce95dd2f6cd91d480b79c5e63b4ef8b2a3851c3170e125d574`).
 `LauncherActivity` accepted the start intent, but the phone remained locked after waking; the app stayed stopped behind the lock screen. Gameplay and post-update Vulkan/ADPF/BC diagnostics were therefore not exercised. No FPS or thermal result is available, and no Mali performance gain is claimed.
+
+## PanVK r8 Xiaomi 11T validation (2026-11-03)
+
+Built APK `0.6.68` (`versionCode=668`) with JimVulkan PanVK r8 and the installed app's matching `apk/d2r-debug.keystore`; `adb install -r` succeeded. `files/d2r-package` and `files/save` remain present, and the saved launcher selection remains `panvk`.
+
+The installed APK includes PanVK r8, System Vulkan and Turnip. The app-UID PanVK driver-properties smoke loaded the bundled r8 ICD on the Xiaomi 11T and reported Mali-G77 MC9, driver ID 20, Vulkan 1.3.363, subgroup 16; instance/device/queue setup and `vkDeviceWaitIdle` passed. A separate System Vulkan control passed with driver ID 9 and Vulkan 1.1.177. This preserves the explicit System fallback and does not alter guest synchronization.
+
+The phone remained in Doze with the screen off after the wake attempt, so no interactive D2R scene, surface/present path or gameplay FPS was measured. JimVulkan's reported G77 2,000-small-draw benchmark (6.55 ms to 2.2 ms) is upstream data, not a D2R result; no in-game speedup is claimed yet.
+
+APK: `http://100.86.44.23:8811/D2R-Xiaomi-11T-Mali-G77-PanVK-r8-0.6.68.apk` (HTTP 200, full-download SHA-256 `29004400a7e66b3a4b1b1dac8d315f8af435d64baeb4759efc473811570f99f7`).
+
+
+
+## Xiaomi 11T PanVK selector and Android-surface recheck (2026-11-04)
+
+Built APK `0.6.69` (`versionCode=669`) with the installed app's matching signing key and installed it in place; imported game files and saves remained present. On-device UI testing confirmed the driver selector cycles between PanVK and System Vulkan, and PanVK remains selected after force-stop/relaunch. The saved config is `backend=panvk`, `require_custom=1`.
+
+Starting the game with PanVK selected aborts before rendering:
+
+```text
+selected instance has no vkCreateAndroidSurfaceKHR
+required driver/subgroup policy failed
+```
+
+An app-UID probe against the installed ICD enumerated 14 instance extensions, including `VK_KHR_surface` and `VK_KHR_android_surface`. Creating an instance with both succeeded, but `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` returned NULL; `vkDestroySurfaceKHR` and `vkGetPhysicalDeviceSurfaceSupportKHR` were non-NULL. The selector and linker-namespace load work; the advertised Android-surface extension has no usable create entrypoint in this direct-ICD path. Strict `require_custom=1` means PanVK failure does not silently select System Vulkan.
+
+No game scene rendered and no FPS was measured. System Vulkan remained selectable, but gameplay in that mode was not tested in this pass. PanVK is not playable on this device until Android surface/swapchain/present support is implemented and retested.
