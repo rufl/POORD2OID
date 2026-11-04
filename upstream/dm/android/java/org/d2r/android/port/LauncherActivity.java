@@ -345,11 +345,11 @@ public final class LauncherActivity extends Activity {
             }
             return null;
         }
-        boolean panvk = selected.equals("panvk");
-        String profile = panvk ? null : readProfileSize();
-        if (!panvk && profile == null) return "host-subgroup-size.txt";
-        String libraryName = panvk ? "libvulkan_panfrost.so" : "vulkan.purple.so";
-        String asset = panvk ? PANVK_ASSET : TURNIP_ASSET;
+        if (selected.equals("panvk")) return text("dmAndroidLaunchPanvkWsiMissing");
+        String profile = readProfileSize();
+        if (profile == null) return "host-subgroup-size.txt";
+        String libraryName = "vulkan.purple.so";
+        String asset = TURNIP_ASSET;
         File directory = new File(temporary, "driver-" + selected);
         File library = new File(directory, libraryName);
         String copyProblem = copyDriverAsset(asset, library);
@@ -359,7 +359,7 @@ public final class LauncherActivity extends Activity {
         content.append("directory=").append(directory.getAbsolutePath()).append('\n');
         content.append("library=").append(libraryName).append('\n');
         content.append("require_custom=1\n");
-        if (!panvk) content.append("subgroup_size=").append(profile).append('\n');
+        content.append("subgroup_size=").append(profile).append('\n');
         return writeDriverConfiguration(configuration, content.toString());
     }
 

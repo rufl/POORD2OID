@@ -5,16 +5,21 @@
 `t_i18n` 依赖的 `dm_i18n.c` 用 `<TargetConditionals.h>`），这里把它们如实列为"跳过"，
 而不是假装全绿。CI 与本地都跑这个脚本，两边看到的是同一组检查。
 
+Windows 上，启动配置的 POSIX 测试通过默认 WSL 发行版运行（需要 `wsl.exe`、`bash` 和 `cc`）；WSL 不可用时明确报失败。
+
+On Windows, the POSIX launch-settings tests use the default WSL distribution (`wsl.exe`, `bash` and `cc`); a missing WSL is reported as a failed check.
+
 The checks that work on Linux / CI, plus a hygiene check that no game data is in the repository.
 A couple of host tests are macOS-only (`t_thread_leak` includes <malloc/malloc.h>; `dm_i18n.c`, which `t_i18n`
 needs, includes <TargetConditionals.h>); they are listed as skipped rather than silently assumed to pass. CI and
 a developer run this same script, so both see the same set.
 """
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]          # dm/android
 REPO = ROOT.parents[1]                              # repository root
@@ -61,6 +66,33 @@ def compile_and_run(name, sources, binary, compile_flags=()):
         return
     result = run([binary])
     report(name, result.returncode == 0, (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
+
+
+def wsl_path(path):
+    """Translate an absolute Windows drive path to WSL's conventional /mnt/<drive> path."""
+    path = Path(path).resolve()
+    drive = path.drive.rstrip(":").lower()
+    if not drive or not path.is_absolute():
+        raise ValueError("WSL launch-settings paths must be absolute drive paths")
+    return PurePosixPath("/mnt", drive, *path.parts[1:])
+
+
+def launch_settings_check(name, sources, binary, compile_flags=()):
+    if sys.platform != "win32":
+        compile_and_run(name, sources, binary, compile_flags)
+        return
+
+    command = ["cc", *(wsl_path(part) if isinstance(part, Path) else part for part in compile_flags),
+               "-o", wsl_path(binary), *(wsl_path(p) for p in sources)]
+    shell = " ".join(shlex.quote(str(part)) for part in command)
+    shell += " && " + shlex.quote(str(wsl_path(binary)))
+    try:
+        result = run(["wsl.exe", "--exec", "bash", "-lc", shell])
+    except OSError as error:
+        report(name + "（WSL 启动失败）", False, str(error))
+        return
+    report(name + ("（编译）" if result.returncode != 0 and "error:" in result.stdout else ""),
+           result.returncode == 0, (result.stdout or "").strip()[-400:])
 
 
 def hygiene():
@@ -115,11 +147,11 @@ def main():
         compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
         launch = [ROOT / "native/launch_settings.c", ROOT / "tests/launch_settings_test.c"]
-        compile_and_run("启动设置（普通）", launch, workspace / "launch_settings",
-                        ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
-        compile_and_run("启动设置（环境故障注入）", launch, workspace / "launch_settings_fault",
-                        ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native",
-                         "-DDM_LAUNCH_SETTINGS_TEST_WRAP_ENV", "-Wl,--wrap=setenv", "-Wl,--wrap=unsetenv"))
+        launch_settings_check("启动设置（普通）", launch, workspace / "launch_settings",
+                              ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
+        launch_settings_check("启动设置（环境故障注入）", launch, workspace / "launch_settings_fault",
+                              ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native",
+                               "-DDM_LAUNCH_SETTINGS_TEST_WRAP_ENV", "-Wl,--wrap=setenv", "-Wl,--wrap=unsetenv"))
 
         # 存档的压缩/解压/原子替换、数据包导入的规则与验收都是纯 Java（不碰 Android API），用项目 JDK 在宿主机上跑。
         # 数据包这一支是补上来的：导入曾经只检查"每个类别至少一个文件"，一个残缺的包能通过并让游戏开不了机。

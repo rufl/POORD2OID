@@ -80,3 +80,7 @@ ld.lld: error: undefined hidden symbol: dm_android_context_storage
   变量莫名其妙为空）。`.ps1` 一律**带 BOM 写**（或全 ASCII）。
 - **删除命令受限**：永久删除被安全策略挡住；可恢复删除要用顶层 `rm -- "<字面量路径>"`
   （本仓库内的路径才行，变量形式会被拒）。
+
+## 在 Windows 上运行宿主检查
+
+从仓库根目录运行 `python upstream/dm/android/tools/ci_checks.py`。启动配置测试使用 POSIX FIFO、`setenv` 故障注入和 `alarm`，Windows 原生 MinGW 不提供这些接口；Windows 上这两项通过默认 WSL 发行版中的 `bash` 与 `cc` 编译、运行。缺少 WSL 或其 C 编译器时会报告失败，不会静默跳过。其他检查仍由 Windows Python 执行。

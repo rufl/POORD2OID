@@ -233,10 +233,9 @@ def main():
         shutil.copyfile(artwork, assets / artwork.name)
     for override in sorted((ROOT / "local").glob("launcher-background.*")):
         shutil.copyfile(override, assets / override.name)
-    # Turnip ships for Qualcomm KGSL; JimVulkan PanVK r8 remains an experimental Mali-kbase bundle.
-    # The app-UID probe enumerates VK_KHR_android_surface but returns no vkCreateAndroidSurfaceKHR, so the current
-    # Xiaomi 11T game launch aborts before rendering; bundle presence is not an Android WSI compatibility claim.
-    # The launcher gates PanVK on API 31+ and /dev/mali0. --no-panvk is the explicit opt-out.
+    # Turnip ships for Qualcomm KGSL. The bundled JimVulkan PanVK r8 driver is experimental and lacks
+    # VK_KHR_android_surface / vkCreateAndroidSurfaceKHR, so the launcher refuses D2R startup when it is selected.
+    # Keep the driver bundled for diagnostics and later WSI work; --no-panvk remains the explicit opt-out.
     if args.no_turnip:
         shutil.rmtree(assets / "turnip", ignore_errors=True)
         print("Turnip driver: excluded (--no-turnip)", flush=True)
