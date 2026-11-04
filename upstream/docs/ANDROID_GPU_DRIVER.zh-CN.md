@@ -244,11 +244,11 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 ## 三种 Vulkan 后端（System / PanVK / Turnip）
 
-启动器提供三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 JimVulkan PanVK r8，仅在 Android API 31+ 且存在 `/dev/mali0` 的 Mali kbase 设备显示；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 时显示。因此 Xiaomi 11T（Mali-G77 MC9）可选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
+启动器提供三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 JimVulkan PanVK r9，仅在 Android API 31+ 且存在 `/dev/mali0` 的 Mali kbase 设备显示；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 时显示。因此 Xiaomi 11T（Mali-G77 MC9）可选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
 
-PanVK 包来自 [JimVulkan mali-panvk v1.4.0 / r8](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.4.0)，构建固定校验 ZIP 与 `.so` 的 SHA-256，并将上游 `NOTICE.txt` 随 APK 分发。PanVK 只可在 API 31+ 使用；启动器与 native loader 都拒绝更旧系统。驱动复制仍通过 SHA-256 sidecar 检测升级。native 端要求最终 `VkPhysicalDeviceDriverProperties.driverID` 为 `VK_DRIVER_ID_MESA_PANVK`。PanVK 与 Turnip 继续 `require_custom=1` 严格启动；失败时明确报错，不暗中切换。`system` 仍是玩家主动选择的回退。
+PanVK 包来自 [JimVulkan mali-panvk v1.5.0 / r9](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0)，构建固定校验 ZIP 与 `.so` SHA-256，并随 APK 分发上游 `NOTICE.txt`。r9 声明 Android API 31+，上游列出 Mali-G77 支持。native 端通过 AdrenoTools 注入 Android 平台 Vulkan loader，并严格要求最终 `driverID` 为 `VK_DRIVER_ID_MESA_PANVK`；PanVK namespace 会链接 Android 平台依赖，不把私有系统 `.so` 复制进 APK。启动器与 native loader 均严格 `require_custom=1`，加载失败不暗中切换；`system` 仍是玩家主动选择的回退。
 
-历史记录：以下 2026-11-03 的设备级验证针对旧版 FristOneRR v3.7.0，不代表当前 JimVulkan r8。
+历史记录：以下 r8 / FristOneRR 设备验证只代表旧版直接 ICD 加载路径，不代表当前 r9 的 Android 平台 loader 路径。
 
 2026-11-03 构建后的 `run-as` App UID fixture（不代表 Java Activity 的 classloader namespace）：系统驱动（ID 9）与 PanVK（ID 20）均通过 instance、physical-device、device、queue 与 `vkDeviceWaitIdle` 检查；PanVK 实际报告 Mali-G77 MC9、API 1.3、subgroup 16。PanVK 的 subgroup16 游戏 profile 检查通过；已导入数据包中的 profile 也是16；profile64 按预期因与物理 subgroup16 不匹配而拒绝。PanVK 完整 Vulkan 回归组件尚未通过：在 `tests/vulkan_test.c:52` 的 1 秒 `mtl_wait` 断言中 abort。系统驱动回归组件也未全通过，在之后的 `uniform_arena_reference_test` 断言中 abort。因此只确认两个 loader/device-init 路径；**没有验证 Android surface/swapchain present 或真实 D2R 进入实战**。上游把 PanVK 标为 non-conformant，仍属实验选项，不承诺兼容性或性能。构建可用 `--no-panvk` / `--no-turnip` 显式排除对应包；默认 APK 打包二者。
 ### PanVK Android linker namespace fix and Xiaomi 11T smoke (2026-11-03)
@@ -291,3 +291,9 @@ required driver/subgroup policy failed
 以应用 UID 对安装版 ICD 运行独立探针：枚举到 14 个 instance extension（包含 `VK_KHR_surface` 和 `VK_KHR_android_surface`）；同时启用这两个扩展后 `vkCreateInstance` 成功，但 `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` 返回 NULL。`vkDestroySurfaceKHR` 与 `vkGetPhysicalDeviceSurfaceSupportKHR` 非 NULL。因此这是 PanVK Android surface 入口缺失，不是驱动下拉框选错，也不是 linker namespace 未加载。仅列出 Android surface 扩展并不代表实现了 surface 创建。
 
 启动器对 PanVK 使用 `require_custom=1`，所以不会静默换到系统驱动；测试没有验证 System 模式能否进入游戏，也没有实战 FPS 数据。当前 PanVK 在此设备上不能用于游戏；必须补齐真实 Android window/surface/swapchain/present 支持后再重新验证。
+
+### PanVK r9 Android-loader / WSI dispatch smoke（2026-11-04）
+
+APK `0.6.71` 使用已安装应用匹配的 `apk/d2r-debug.keystore` 构建并通过 `adb install -r` 原位安装。以应用 UID 运行严格 `require_custom=1` 的 driver-properties fixture，确认实际加载的是 PanVK（`driverID=20`），设备为 Mali-G77 MC9（vendor `0x13b5`、device `0x90800011`），API `1.4.363`、subgroup 16；`vkCreateDevice`、queue 与 `vkDeviceWaitIdle` 成功。`VK_KHR_surface`、`VK_KHR_android_surface` 和 `VK_KHR_swapchain` 可用，Android-surface 与 swapchain 分发表检查通过。System Vulkan 对照（driver ID 9、API `1.1.177`）也通过同一 WSI dispatch smoke。
+
+这次只测 Vulkan loader、PanVK 身份、设备创建和 WSI dispatch；没有创建真实 `ANativeWindow` surface、swapchain、present 帧，也没有启动 D2R 或测 FPS。PanVK 仍标记为非一致性实验驱动；游戏实测由用户进行。

@@ -374,7 +374,7 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidLaunchResolution", "分辨率", "Resolution" },
     { "dmAndroidLaunchDriver", "驱动", "Driver" },
     { "dmAndroidLaunchDriverSystem", "系统驱动", "System Vulkan" },
-    { "dmAndroidLaunchDriverPanvk", "PanVK（暂不支持本游戏）", "PanVK (not supported by D2R)" },
+    { "dmAndroidLaunchDriverPanvk", "PanVK（实验性 Mali 驱动）", "PanVK (experimental Mali driver)" },
     { "dmAndroidLaunchDriverTurnip", "内置 Turnip", "Built-in Turnip" },
     { "dmAndroidLaunchDriverPreparing", "正在准备所选驱动…", "Preparing selected driver…" },
     { "dmAndroidLaunchDriverFailed", "所选驱动不可用：%s", "Selected driver unavailable: %s" },
@@ -405,5 +405,4 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidSaveImportConfirmGame", "导入会替换当前存档并退出游戏，重开后加载导入的存档。", "Importing replaces the current save and exits the game; the next launch loads the imported save." },
     { "dmAndroidSaveNone", "还没有存档可以导出", "There is no save to export yet" },
     { "dmAndroidSaveWorking", "正在处理存档…", "Working on the save…" },
-    { "dmAndroidLaunchPanvkWsiMissing", "随包 PanVK 未实现 D2R 所需的 VK_KHR_android_surface。请选择系统 Vulkan。", "The bundled PanVK driver does not implement the VK_KHR_android_surface extension required by D2R. Select System Vulkan." },
 };

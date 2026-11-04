@@ -3,7 +3,6 @@
 #define _GNU_SOURCE
 #include "gpu_driver.h"
 #include "gpu_driver_policy.h"
-#include <vulkan/vk_icd.h>
 #include <adrenotools/driver.h>
 #include <ctype.h>
 #include <dlfcn.h>
@@ -19,8 +18,7 @@
 #include <android/log.h>
 #endif
 
-typedef void *(*adreno_open_fn)(int,int,const char *,const char *,const char *,const char *,const char *,void **);
-typedef void *(*panvk_namespace_open_fn)(const char *,const char *,char *,size_t);
+typedef void *(*adrenotools_open_fn)(int,int,const char *,const char *,const char *,const char *,const char *,void **);
 static void driver_log(const char *format,...) {
     char text[1536];va_list args;va_start(args,format);vsnprintf(text,sizeof text,format,args);va_end(args);
     fprintf(stderr,"[vulkan-loader] %s\n",text);
@@ -122,46 +120,34 @@ static int configure(dm_vk_driver *d) {
     char resolved[PATH_MAX];if(!realpath(d->driver_directory,resolved))return driver_error(d,"custom driver directory: %s",strerror(errno));
     if(!strncmp(resolved,"/sdcard",7)||!strncmp(resolved,"/storage",8)||!strncmp(resolved,"/mnt",4))return driver_error(d,"custom driver must be in internal executable storage");
     if(snprintf(d->driver_directory,sizeof d->driver_directory,"%s/",resolved)>=(int)sizeof d->driver_directory)return driver_error(d,"custom driver directory is too long");
-    if(d->backend==DM_VK_BACKEND_TURNIP){
-        const char *hooks=getenv("DM_ANDROID_LIBDIR");if(!hooks||!*hooks)return driver_error(d,"DM_ANDROID_LIBDIR is required for Turnip hooks");
+    if(d->backend==DM_VK_BACKEND_TURNIP||d->backend==DM_VK_BACKEND_PANVK){
+        const char *hooks=getenv("DM_ANDROID_LIBDIR");if(!hooks||!*hooks)return driver_error(d,"DM_ANDROID_LIBDIR is required for custom Vulkan drivers");
         if(!realpath(hooks,resolved))return driver_error(d,"hook library directory: %s",strerror(errno));
         if(snprintf(d->hook_directory,sizeof d->hook_directory,"%s/",resolved)>=(int)sizeof d->hook_directory)return driver_error(d,"hook directory is too long");
     }
     return 1;
 }
-static int load_globals(dm_vk_driver *d,int panvk_icd) {
-    const char *entry=panvk_icd?"vk_icdGetInstanceProcAddr":"vkGetInstanceProcAddr";
-    dlerror();d->vkGetInstanceProcAddr=(PFN_vkGetInstanceProcAddr)dlsym(d->library,entry);
-    if(!d->vkGetInstanceProcAddr)return driver_error(d,"selected %s library has no %s",panvk_icd?"PanVK":"Vulkan loader",entry);
+static int load_globals(dm_vk_driver *d) {
+    dlerror();d->vkGetInstanceProcAddr=(PFN_vkGetInstanceProcAddr)dlsym(d->library,"vkGetInstanceProcAddr");
+    if(!d->vkGetInstanceProcAddr)return driver_error(d,"selected Vulkan loader has no vkGetInstanceProcAddr");
 #define DM_VK_LOAD(name) do{d->name=(PFN_##name)d->vkGetInstanceProcAddr(VK_NULL_HANDLE,#name);if(!d->name)return driver_error(d,"selected loader has no %s",#name);}while(0);
     DM_VK_GLOBAL_FUNCTIONS(DM_VK_LOAD)
 #undef DM_VK_LOAD
     return 1;
 }
-static int open_panvk(dm_vk_driver *d) {
-    char resolved[PATH_MAX],helper_path[PATH_MAX],namespace_error[512]={0};
-    const char *library_directory=getenv("DM_ANDROID_LIBDIR");
-    if(!library_directory||!realpath(library_directory,resolved))
-        return driver_error(d,"PanVK namespace loader directory: %s",library_directory?strerror(errno):"DM_ANDROID_LIBDIR is unset");
-    if(snprintf(helper_path,sizeof helper_path,"%s/libpanvk_namespace.so",resolved)>=(int)sizeof helper_path)
-        return driver_error(d,"PanVK namespace loader path is too long");
-    d->panvk_namespace=dlopen(helper_path,RTLD_NOW|RTLD_LOCAL);
-    if(!d->panvk_namespace){const char *error=dlerror();return driver_error(d,"PanVK namespace loader: %s",error?error:"open failed");}
-    panvk_namespace_open_fn open=(panvk_namespace_open_fn)dlsym(d->panvk_namespace,"dm_panvk_namespace_open");
-    if(!open)return driver_error(d,"PanVK namespace loader entrypoint is missing");
-    d->library=open(d->driver_directory,d->driver_name,namespace_error,sizeof namespace_error);
-    if(!d->library)return driver_error(d,"PanVK namespace dlopen: %s",namespace_error[0]?namespace_error:"open failed");
-    PFN_vk_icdNegotiateLoaderICDInterfaceVersion negotiate=
-        (PFN_vk_icdNegotiateLoaderICDInterfaceVersion)dlsym(d->library,"vk_icdNegotiateLoaderICDInterfaceVersion");
-    if(!negotiate)return driver_error(d,"PanVK loader negotiation entrypoint is missing");
-    uint32_t interface_version=CURRENT_LOADER_ICD_INTERFACE_VERSION;
-    VkResult result=negotiate(&interface_version);
-    if(result!=VK_SUCCESS||interface_version<1)
-        return driver_error(d,"PanVK ICD interface negotiation failed: result=%d version=%u",result,interface_version);
-    driver_log("PanVK ICD loader interface version=%u",interface_version);
-    if(!load_globals(d,1))return 0;
+static int open_custom_driver(dm_vk_driver *d) {
+    char path[1200];if(snprintf(path,sizeof path,"%slibadrenotools.so",d->hook_directory)>=(int)sizeof path)
+        return driver_error(d,"adrenotools library path is too long");
+    d->adrenotools=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+    if(!d->adrenotools){const char *error=dlerror();return driver_error(d,"adrenotools: %s",error?error:"open failed");}
+    adrenotools_open_fn open=(adrenotools_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan");
+    if(!open)return driver_error(d,"adrenotools_open_libvulkan is missing");
+    d->library=open(RTLD_NOW,ADRENOTOOLS_DRIVER_CUSTOM,NULL,d->hook_directory,d->driver_directory,d->driver_name,NULL,NULL);
+    if(!d->library)return driver_error(d,"adrenotools custom Vulkan loader open failed");
+    if(!load_globals(d))return 0;
     d->using_custom=1;
-    driver_log("requested=PanVK library=%s%s; ICD identity pending",d->driver_directory,d->driver_name);
+    driver_log("requested=%s library=%s%s; Android platform loader supplies WSI; ICD identity pending",
+        backend_name(d->backend),d->driver_directory,d->driver_name);
     return 1;
 }
 static int open_system(dm_vk_driver *d) {
@@ -177,14 +163,14 @@ static int open_system(dm_vk_driver *d) {
 #ifdef __ANDROID__
     // 只用所选handle的GIPA，不调用链接到全局系统loader的Vk入口。
     // Use only the selected handle's GIPA, never a globally linked system Vulkan entry point.
-    adreno_open_fn open=d->adrenotools?(adreno_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan"):NULL;
+    adrenotools_open_fn open=d->adrenotools?(adrenotools_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan"):NULL;
     if(open)d->library=open(RTLD_NOW,0,NULL,d->hook_directory,NULL,NULL,NULL,NULL);
     if(!d->library)d->library=dlopen("libvulkan.so",RTLD_NOW|RTLD_LOCAL);
 #else
     d->library=dlopen("libvulkan.so.1",RTLD_NOW|RTLD_LOCAL);
 #endif
     if(!d->library){const char *error=dlerror();return driver_error(d,"system Vulkan loader: %s",error?error:"open failed");}
-    if(!load_globals(d,0))return 0;
+    if(!load_globals(d))return 0;
     driver_log("requested=%s selected=system",d->requested_custom?backend_name(d->backend):"system");return 1;
 }
 static int fallback_to_system(dm_vk_driver *d) {
@@ -204,30 +190,18 @@ int dm_vk_driver_open(dm_vk_driver *d) {
     if(!d->requested_custom)return open_system(d);
 #ifdef __ANDROID__
     if(d->backend==DM_VK_BACKEND_PANVK){
-        if(android_get_device_api_level()<31)driver_error(d,"PanVK r8 requires Android API31+");
+        if(android_get_device_api_level()<31)driver_error(d,"PanVK r9 requires Android API31+");
         else if(access("/dev/mali0",F_OK))driver_error(d,"PanVK requires the Mali kbase device /dev/mali0");
-        else if(open_panvk(d))return 1;
+        else if(open_custom_driver(d))return 1;
     }else if(d->backend==DM_VK_BACKEND_TURNIP){
         if(android_get_device_api_level()<30||access("/dev/kgsl-3d0",F_OK))driver_error(d,"Turnip T30 requires API30+ and KGSL");
-        else{
-            char path[1200];snprintf(path,sizeof path,"%slibadrenotools.so",d->hook_directory);d->adrenotools=dlopen(path,RTLD_NOW|RTLD_LOCAL);
-            if(!d->adrenotools){const char *error=dlerror();driver_error(d,"adrenotools: %s",error?error:"open failed");}
-            else{
-                adreno_open_fn open=(adreno_open_fn)dlsym(d->adrenotools,"adrenotools_open_libvulkan");
-                if(!open)driver_error(d,"adrenotools_open_libvulkan is missing");
-                else{d->library=open(RTLD_NOW,ADRENOTOOLS_DRIVER_CUSTOM,NULL,d->hook_directory,d->driver_directory,d->driver_name,NULL,NULL);
-                    if(!d->library)driver_error(d,"adrenotools custom loader open failed");
-                    else if(load_globals(d,0)){d->using_custom=1;driver_log("requested=Turnip library=%s%s; identity pending",d->driver_directory,d->driver_name);return 1;}
-                }
-            }
-        }
+        else if(open_custom_driver(d))return 1;
     }else driver_error(d,"unknown custom Vulkan backend");
 #else
     driver_error(d,"custom Vulkan drivers are Android-only");
 #endif
     char reason[sizeof d->error];snprintf(reason,sizeof reason,"%s",dm_vk_driver_error(d));driver_log("custom initialization failed: %s",reason);
     if(d->library){dlclose(d->library);d->library=NULL;}
-    if(d->panvk_namespace){dlclose(d->panvk_namespace);d->panvk_namespace=NULL;}
     return fallback_to_system(d);
 }
 static int is_wsi_function(const char *name) {
@@ -368,9 +342,8 @@ int dm_vk_driver_fallback(dm_vk_driver *d,const char *reason) {
     char message[512];snprintf(message,sizeof message,"%s",reason?reason:dm_vk_driver_error(d));driver_log("custom initialization failed: %s",message);
     if(d->require_custom){driver_error(d,"required driver policy failed: %s",message);return 0;}
     if(d->library){dlclose(d->library);d->library=NULL;}
-    if(d->panvk_namespace){dlclose(d->panvk_namespace);d->panvk_namespace=NULL;}
     return fallback_to_system(d);
 }
 void dm_vk_driver_close(dm_vk_driver *d) {
-    reset_subgroup_policy(d);if(d->library)dlclose(d->library);if(d->panvk_namespace)dlclose(d->panvk_namespace);if(d->adrenotools)dlclose(d->adrenotools);memset(d,0,sizeof *d);
+    reset_subgroup_policy(d);if(d->library)dlclose(d->library);if(d->adrenotools)dlclose(d->adrenotools);memset(d,0,sizeof *d);
 }

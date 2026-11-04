@@ -651,3 +651,9 @@ required driver/subgroup policy failed
 以应用 UID 对安装版 ICD 运行探针，枚举到 14 个 instance extension（含 `VK_KHR_surface` 和 `VK_KHR_android_surface`）。同时启用两个扩展后 instance 创建成功，但 `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` 返回 NULL；`vkDestroySurfaceKHR` 与 `vkGetPhysicalDeviceSurfaceSupportKHR` 非 NULL。因此选择器与 linker namespace 加载正常，问题是 direct-ICD 路径虽广告 Android surface 扩展，却没有可用的创建入口。`require_custom=1` 使 PanVK 失败时不会静默改用 System Vulkan。
 
 没有渲染出游戏画面，也没有 FPS 测量。System Vulkan 仍可选择，但本轮未验证该模式下的游戏实战。必须先实现 Android surface/swapchain/present 支持，再验证 PanVK；当前它在此设备上不可玩。
+
+## Xiaomi 11T PanVK r9 Android-loader WSI 冒烟测试（2026-11-04）
+
+使用已安装应用匹配的 `apk/d2r-debug.keystore` 构建 APK `0.6.71`，并通过 `adb install -r` 原位安装。以应用 UID 运行严格 `require_custom=1` 的 driver-properties fixture，确认 PanVK 经 Android 平台 Vulkan loader 加载，实际 `driverID=20`；设备为 Mali-G77 MC9（`vendor=0x13b5`、`device_id=0x90800011`、API `1.4.363`、subgroup 16）。`vkCreateDevice`、queue 获取和 `vkDeviceWaitIdle` 通过。`VK_KHR_surface`、`VK_KHR_android_surface`、`VK_KHR_swapchain` 均可用，Android-surface 与 swapchain 分发表检查通过。System Vulkan 对照（driver ID 9、API `1.1.177`）也通过相同 WSI dispatch 冒烟测试。
+
+此测试没有创建真实 `ANativeWindow` surface、swapchain 或 present 帧，也没有启动 D2R、测量 FPS。PanVK 仍是实验性、非一致性驱动；游戏实测留给用户。

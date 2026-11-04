@@ -77,11 +77,30 @@ def build_locked(output):
         target = include / header.name
         if not target.exists() or target.read_bytes() != header.read_bytes():
             shutil.copyfile(header, target)
+    # PanVK r9 needs Android platform libraries such as libui.so; the pinned adrenotools hook normally links only libandroid.so.
+    # Patch only the build copy for PanVK, exposing platform dependencies without bundling private Android libraries.
+    hook_source = source / "src/hook/hook_impl.cpp"
+    namespace_link = '    android_link_namespaces(driverNs, nullptr, "libandroid.so");'
+    panvk_namespace_link = '''    if (hook_params->featureFlags & ADRENOTOOLS_DRIVER_CUSTOM
+            && hook_params->customDriverName == "libvulkan_panfrost.so") {
+        if (!linkernsbypass_link_namespace_to_default_all_libs(driverNs)) {
+            LOGI("hook_android_dlopen_ext: failed to link PanVK namespace to Android system libraries");
+            return fallback();
+        }
+    } else {
+        android_link_namespaces(driverNs, nullptr, "libandroid.so");
+    }'''
+    hook_text = hook_source.read_text()
+    if hook_text.count(namespace_link) != 1:
+        raise RuntimeError("pinned adrenotools hook namespace link changed")
+    patched_hook = output / "hook_impl.cpp"
+    patched_text = hook_text.replace(namespace_link, panvk_namespace_link)
+    if not patched_hook.exists() or patched_hook.read_text() != patched_text:
+        patched_hook.write_text(patched_text)
     sources = [source / "src/driver.cpp", source / "src/bcenabler.cpp",
                linker / "android_linker_ns.cpp", linker / "elf_soname_patcher.cpp",
-               source / "src/hook/hook_impl.cpp", source / "src/hook/main_hook.c",
-               source / "src/hook/file_redirect_hook.c", source / "src/hook/gsl_alloc_hook.c",
-               Path(__file__).with_name("panvk_namespace_loader.cpp")]
+               patched_hook, source / "src/hook/main_hook.c",
+               source / "src/hook/file_redirect_hook.c", source / "src/hook/gsl_alloc_hook.c"]
 
     def compile_file(path):
         obj = output / (path.stem + ".o")
@@ -90,7 +109,7 @@ def build_locked(output):
         compiler = BIN / ("aarch64-linux-android29-clang++" if cpp else "aarch64-linux-android29-clang")
         command = [str(compiler), "-c", "-O2", "-fPIC", "-Wall", "-Wextra",
                    "-MMD", "-MF", str(deps), "-I", str(source), "-I", str(source / "include"),
-                   "-I", str(linker), str(path), "-o", str(obj)]
+                   "-I", str(source / "src/hook"), "-I", str(linker), str(path), "-o", str(obj)]
         if cpp:
             command.insert(2, "-std=c++17")
         if path.stem == "hook_impl":
@@ -121,7 +140,6 @@ def build_locked(output):
         "main_hook": [by_name["main_hook"]],
         "file_redirect_hook": [by_name["file_redirect_hook"]],
         "gsl_alloc_hook": [by_name["gsl_alloc_hook"]],
-        "panvk_namespace": [by_name["panvk_namespace_loader"], archive],
     }
     for name, inputs in targets.items():
         library = output / ("lib" + name + ".so")
@@ -144,6 +162,11 @@ def build_locked(output):
                 raise RuntimeError("GPU driver link failed: " + name + "\n" + result.stderr)
             stamp.write_text(recorded)
         libraries.append(library)
+    for stale in ("hook_impl_panvk.cpp", "hook_impl_panvk.o", "hook_impl_panvk.d",
+                  "hook_impl_panvk.cmd", "hook_impl_panvk.log", "panvk_namespace_loader.o",
+                  "panvk_namespace_loader.d", "panvk_namespace_loader.cmd", "panvk_namespace_loader.log",
+                  "libpanvk_namespace.so", "libpanvk_namespace.cmd", "panvk_namespace-link.log"):
+        (output / stale).unlink(missing_ok=True)
     licenses = output / "licenses"
     licenses.mkdir(exist_ok=True)
     for name, src in (("libadrenotools", source), ("liblinkernsbypass", linker)):

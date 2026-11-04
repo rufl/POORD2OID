@@ -348,3 +348,9 @@ required driver/subgroup policy failed
 An app-UID probe against the installed ICD enumerated 14 instance extensions, including `VK_KHR_surface` and `VK_KHR_android_surface`. Creating an instance with both succeeded, but `vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")` returned NULL; `vkDestroySurfaceKHR` and `vkGetPhysicalDeviceSurfaceSupportKHR` were non-NULL. The selector and linker-namespace load work; the advertised Android-surface extension has no usable create entrypoint in this direct-ICD path. Strict `require_custom=1` means PanVK failure does not silently select System Vulkan.
 
 No game scene rendered and no FPS was measured. System Vulkan remained selectable, but gameplay in that mode was not tested in this pass. PanVK is not playable on this device until Android surface/swapchain/present support is implemented and retested.
+
+## Xiaomi 11T PanVK r9 Android-loader WSI smoke (2026-11-04)
+
+Built APK `0.6.71` with the installed app's matching `apk/d2r-debug.keystore` and installed it in place with `adb install -r`. A strict app-UID `require_custom=1` driver-properties fixture loaded PanVK through Android's platform Vulkan loader and verified `driverID=20` on Mali-G77 MC9 (`vendor=0x13b5`, `device_id=0x90800011`, API `1.4.363`, subgroup 16). `vkCreateDevice`, queue retrieval and `vkDeviceWaitIdle` passed. `VK_KHR_surface`, `VK_KHR_android_surface`, and `VK_KHR_swapchain` were available; Android-surface and swapchain dispatch passed. A separate System Vulkan control (driver ID 9, API `1.1.177`) passed the same WSI dispatch smoke.
+
+This did not create an `ANativeWindow` surface, create a swapchain, present a frame, launch D2R, or measure FPS. PanVK remains experimental and non-conformant; gameplay testing is left to the user.

@@ -68,7 +68,7 @@ adb -s "$ANDROID_SERIAL" shell am start -n org.d2r.android.port/.LauncherActivit
 RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用数据。首次无存档会进入建角界面。存档位于应用私有 `files/save/`，不要用其他设备存档覆盖现有角色。驱动与启动配置见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)和[启动设置](ANDROID_LAUNCH_SETTINGS.zh-CN.md)。
 若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
 
-启动器保留三种后端：系统 Vulkan、适用于 Android 12+ Mali kbase（`/dev/mali0`）的 JimVulkan PanVK r8，以及适用于 Qualcomm KGSL（`/dev/kgsl-3d0`）的内置 Turnip。硬件不匹配的选项会隐藏；Xiaomi 11T 应显示系统 Vulkan 与实验性 PanVK，不显示 Turnip。真机 APK 0.6.69 验证了选择器可切换并保存选择，但 PanVK 通过直接 ICD 分发时缺少 `vkCreateAndroidSurfaceKHR`，游戏启动在渲染前中止；目前不能把 PanVK 描述为可玩。该轮没有验证 System 模式游戏实战。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+启动器保留三种后端：系统 Vulkan、适用于 Android 12+ Mali kbase（`/dev/mali0`）的 JimVulkan PanVK r9，以及适用于 Qualcomm KGSL（`/dev/kgsl-3d0`）的内置 Turnip。Xiaomi 11T 显示系统 Vulkan 与实验性 PanVK，不显示 Turnip。APK 0.6.71 的 app-UID 冒烟测试已在 Mali-G77 MC9 上加载 PanVK r9（driver ID 20、subgroup 16）、创建设备并解析 Android surface/swapchain 分发；尚未创建真实 `ANativeWindow` surface、呈现画面、进入 D2R 或测量 FPS。PanVK 仍属实验性、非一致性驱动。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
 
 Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
 Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。

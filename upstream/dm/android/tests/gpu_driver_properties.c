@@ -3,18 +3,44 @@
 #include "../native/gpu_driver.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+static int has_instance_extension(dm_vk_driver *driver,const char *name) {
+    PFN_vkEnumerateInstanceExtensionProperties enumerate=(PFN_vkEnumerateInstanceExtensionProperties)
+        driver->vkGetInstanceProcAddr(VK_NULL_HANDLE,"vkEnumerateInstanceExtensionProperties");
+    uint32_t count=0;
+    if(!enumerate||enumerate(NULL,&count,NULL)!=VK_SUCCESS||count>4096)return 0;
+    VkExtensionProperties *extensions=count?calloc(count,sizeof *extensions):NULL;if(count&&!extensions)return 0;
+    int found=0;
+    if(enumerate(NULL,&count,extensions)==VK_SUCCESS)
+        for(uint32_t i=0;i<count;i++)if(!strcmp(extensions[i].extensionName,name)){found=1;break;}
+    free(extensions);return found;
+}
+static int has_device_extension(dm_vk_driver *driver,VkPhysicalDevice physical,const char *name) {
+    uint32_t count=0;
+    if(driver->vkEnumerateDeviceExtensionProperties(physical,NULL,&count,NULL)!=VK_SUCCESS||count>4096)return 0;
+    VkExtensionProperties *extensions=count?calloc(count,sizeof *extensions):NULL;if(count&&!extensions)return 0;
+    int found=0;
+    if(driver->vkEnumerateDeviceExtensionProperties(physical,NULL,&count,extensions)==VK_SUCCESS)
+        for(uint32_t i=0;i<count;i++)if(!strcmp(extensions[i].extensionName,name)){found=1;break;}
+    free(extensions);return found;
+}
 int main(int argc,char **argv) {
     dm_vk_driver driver={0};VkInstance instance=VK_NULL_HANDLE;VkDevice device=VK_NULL_HANDLE;
     int result=1;VkPhysicalDevice *physical_devices=NULL;VkQueueFamilyProperties *queues=NULL;
     if(argc>2){fprintf(stderr,"usage: gpu-driver-properties [offline-shader-cache-directory]\n");return 2;}
     if(!dm_vk_driver_open(&driver)){fprintf(stderr,"loader: %s\n",dm_vk_driver_error(&driver));goto finish;}
     if(driver.requested_custom&&!driver.using_custom){fprintf(stderr,"FAIL: requested custom driver fell back to system\n");goto finish;}
+    if(!has_instance_extension(&driver,VK_KHR_SURFACE_EXTENSION_NAME)
+            ||!has_instance_extension(&driver,VK_KHR_ANDROID_SURFACE_EXTENSION_NAME)){
+        fprintf(stderr,"Android WSI instance extensions are unavailable\n");goto finish;
+    }
     VkApplicationInfo app={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="D2R driver properties",.apiVersion=VK_API_VERSION_1_1};
-    VkInstanceCreateInfo create={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app};
+    VkInstanceCreateInfo create={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app,
+        .enabledExtensionCount=2,.ppEnabledExtensionNames=(const char *[]){VK_KHR_SURFACE_EXTENSION_NAME,VK_KHR_ANDROID_SURFACE_EXTENSION_NAME}};
     VkResult vk_result=driver.vkCreateInstance(&create,NULL,&instance);
     if(vk_result!=VK_SUCCESS){fprintf(stderr,"vkCreateInstance: %d\n",vk_result);goto finish;}
-    if(!dm_vk_driver_load_instance(&driver,instance,0)){fprintf(stderr,"instance dispatch: %s\n",dm_vk_driver_error(&driver));goto finish;}
+    if(!dm_vk_driver_load_instance(&driver,instance,1)){fprintf(stderr,"instance WSI dispatch: %s\n",dm_vk_driver_error(&driver));goto finish;}
     uint32_t count=0;if(driver.vkEnumeratePhysicalDevices(instance,&count,NULL)!=VK_SUCCESS||!count)goto finish;
     physical_devices=calloc(count,sizeof *physical_devices);if(!physical_devices)goto finish;
     if(driver.vkEnumeratePhysicalDevices(instance,&count,physical_devices)!=VK_SUCCESS)goto finish;
@@ -49,8 +75,13 @@ int main(int argc,char **argv) {
         }
         putchar('\n');
     }
+    if(!has_device_extension(&driver,physical,VK_KHR_SWAPCHAIN_EXTENSION_NAME)){
+        fprintf(stderr,"VK_KHR_swapchain is unavailable\n");goto finish;
+    }
     float priority=1;VkDeviceQueueCreateInfo queue={.sType=VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,.queueFamilyIndex=family,.queueCount=1,.pQueuePriorities=&priority};
-    VkDeviceCreateInfo device_create={.sType=VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,.queueCreateInfoCount=1,.pQueueCreateInfos=&queue};
+    const char *device_extensions[]={VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    VkDeviceCreateInfo device_create={.sType=VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,.queueCreateInfoCount=1,.pQueueCreateInfos=&queue,
+        .enabledExtensionCount=1,.ppEnabledExtensionNames=device_extensions};
     if(!dm_vk_driver_prepare_device(&driver,&device_create)){fprintf(stderr,"device subgroup policy: %s\n",dm_vk_driver_error(&driver));goto finish;}
     vk_result=driver.vkCreateDevice(physical,&device_create,NULL,&device);
     if(vk_result!=VK_SUCCESS){fprintf(stderr,"vkCreateDevice: %d\n",vk_result);goto finish;}
@@ -58,7 +89,7 @@ int main(int argc,char **argv) {
     printf("subgroup physical_default=%u explicit_request=%u shader_selected=%u device_policy_enabled=%d\n",driver.subgroup_size,driver.requested_subgroup_size,driver.effective_shader_subgroup_size,driver.subgroup_policy_enabled);
     VkQueue graphics_queue;driver.vkGetDeviceQueue(device,family,0,&graphics_queue);
     if(!graphics_queue||driver.vkDeviceWaitIdle(device)!=VK_SUCCESS)goto finish;
-    puts("GPU driver properties and dispatch PASS");result=0;
+    puts("Android WSI instance and swapchain dispatch PASS");result=0;
 finish:
     free(queues);free(physical_devices);
     if(device&&driver.vkDestroyDevice)driver.vkDestroyDevice(device,NULL);

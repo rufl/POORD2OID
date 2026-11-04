@@ -38,12 +38,12 @@
   启动界面仅在检测到 API 30+ 与 `/dev/kgsl-3d0` 时显示 Turnip；System Vulkan 始终是回退。
 - 许可文件：`upstream/dm/android/prebuilt/turnip/`（见 `meta.json` 指向的上游许可）
 
-### JimVulkan PanVK r8 (Mesa 27.0.0-devel)
+### JimVulkan PanVK r9 (Mesa 27.0.0-devel)
 
-- Release and source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.4.0>
-- File: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-d896b0a.zip`; `build.py` pins the archive and `libvulkan_panfrost.so` SHA-256.
-- License: MIT for the PanVK changes; the packaged `NOTICE.txt` carries Mesa and all bundled third-party notices/license texts and is included in the APK.
-- Status: Mali kbase / Android API 31+ experimental bundle. On Xiaomi 11T, APK 0.6.69's app-UID probe found `vkCreateAndroidSurfaceKHR` missing and the game aborts before rendering. The upstream G77 microbenchmark is not a D2R FPS result.
+- Release and source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0>
+- File: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-r9.zip`; ZIP SHA-256 `04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376`; bundled `libvulkan_panfrost.so` SHA-256 `6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a`.
+- License: MIT for the PanVK changes; the packaged `NOTICE.txt` carries Mesa and bundled third-party notices/license texts and is included in the APK as `PanVK-JimVulkan-r9.txt`.
+- Status: experimental, non-conformant Mali kbase driver; Android API 31+; upstream release lists Mali-G77 support. APK 0.6.71 on Xiaomi 11T loaded PanVK (driver ID 20), created a device, and resolved Android-surface/swapchain dispatch. No `ANativeWindow` surface, presentation, D2R gameplay or FPS was tested. The custom driver namespace can access Android platform dependencies; no private system libraries are bundled.
 
 
 ### AdrenoTools（`libadrenotools.so` / `libhook_impl.so` / `libmain_hook.so`）

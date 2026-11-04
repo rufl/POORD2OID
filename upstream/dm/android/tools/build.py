@@ -54,8 +54,8 @@ def run(args, **kwargs):
     subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
-PANVK_ARCHIVE_SHA256 = "6ae8d1a22506ed9da26706f9f1ddf430f85ed6778c4ac3c9b9c70250413e51f2"
-PANVK_LIBRARY_SHA256 = "fffd983d79f2a11aa4fc1f18c45b87e5f072be49b56fb466bca07a3a6838cc3e"
+PANVK_ARCHIVE_SHA256 = "04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376"
+PANVK_LIBRARY_SHA256 = "6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a"
 
 
 def sha256_file(path):
@@ -77,8 +77,8 @@ def package_panvk(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "PanVK Mali Bifrost/Valhall (kbase) (Mesa 27.0.0-devel-d896b0a)"
-                    or metadata.get("packageVersion") != "1"
+            if (metadata.get("name") != "PanVK Mali Bifrost/Valhall (kbase) (Mesa 27.0.0-devel-6dc24ce)"
+                    or metadata.get("packageVersion") != "7"
                     or metadata.get("libraryName") != "libvulkan_panfrost.so"):
                 sys.exit("Unexpected PanVK package metadata")
             with archive.open("libvulkan_panfrost.so") as source, temporary.open("wb") as target:
@@ -93,9 +93,11 @@ def package_panvk(archive_path, assets, licenses):
         temporary.unlink(missing_ok=True)
         sys.exit("Invalid PanVK package: " + str(error))
     temporary.replace(panvk_assets / "libvulkan_panfrost.so")
-    shutil.copyfile(panvk_assets / "NOTICE.txt", licenses / "PanVK-JimVulkan-r8.txt")
-    (licenses / "PanVK-FristOneRR-v3.7.0.txt").unlink(missing_ok=True)
-    print("PanVK JimVulkan r8 ICD: verified and bundled", flush=True)
+    for stale_notice in ("PanVK-JimVulkan-r8.txt", "PanVK-JimVulkan-r8-android-wsi.txt",
+                         "PanVK-FristOneRR-v3.7.0.txt"):
+        (licenses / stale_notice).unlink(missing_ok=True)
+    shutil.copyfile(panvk_assets / "NOTICE.txt", licenses / "PanVK-JimVulkan-r9.txt")
+    print("PanVK JimVulkan r9 ICD: verified and bundled", flush=True)
 
 
 
@@ -157,8 +159,8 @@ def main():
                         help="随 APK 分发的 Turnip 驱动；默认用仓库里的 dm/android/prebuilt/turnip/")
     parser.add_argument("--no-turnip", action="store_true",
                         help="不出内置 Turnip 驱动")
-    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/mali-panvk-27.0.0-devel-d896b0a.zip",
-                        help="pinned JimVulkan r8 package; archive and library SHA-256 are verified")
+    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/mali-panvk-27.0.0-devel-r9.zip",
+                        help="pinned JimVulkan r9 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
     args = parser.parse_args()
@@ -233,9 +235,8 @@ def main():
         shutil.copyfile(artwork, assets / artwork.name)
     for override in sorted((ROOT / "local").glob("launcher-background.*")):
         shutil.copyfile(override, assets / override.name)
-    # Turnip ships for Qualcomm KGSL. The bundled JimVulkan PanVK r8 driver is experimental and lacks
-    # VK_KHR_android_surface / vkCreateAndroidSurfaceKHR, so the launcher refuses D2R startup when it is selected.
-    # Keep the driver bundled for diagnostics and later WSI work; --no-panvk remains the explicit opt-out.
+    # Turnip is Qualcomm KGSL-only. PanVK r9 lists Mali-G77 support and includes Android gralloc support; load it
+    # through Android's platform Vulkan loader so the platform loader supplies Android WSI.
     if args.no_turnip:
         shutil.rmtree(assets / "turnip", ignore_errors=True)
         print("Turnip driver: excluded (--no-turnip)", flush=True)
@@ -251,8 +252,9 @@ def main():
 
     if args.no_panvk:
         shutil.rmtree(assets / "panvk", ignore_errors=True)
-        (licenses / "PanVK-JimVulkan-r8.txt").unlink(missing_ok=True)
-        (licenses / "PanVK-FristOneRR-v3.7.0.txt").unlink(missing_ok=True)
+        for stale_notice in ("PanVK-JimVulkan-r9.txt", "PanVK-JimVulkan-r8.txt",
+                             "PanVK-JimVulkan-r8-android-wsi.txt", "PanVK-FristOneRR-v3.7.0.txt"):
+            (licenses / stale_notice).unlink(missing_ok=True)
         print("PanVK driver: excluded (--no-panvk)", flush=True)
     else:
         package_panvk(args.panvk, assets, licenses)

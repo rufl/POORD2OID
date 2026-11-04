@@ -81,7 +81,7 @@ public final class LauncherActivity extends Activity {
     // 1280x720 and 1600x900 are there for GPU-bound devices: one step down in resolution is a real step up in frame
     // rate (measured 1080p -> 720p: about 10 -> 16 fps).
     private static final String[] RESOLUTION_PRESETS = {"", "1280x720", "1600x900", "1920x1080", "2560x1440"};
-    // Keep stock Vulkan, JimVulkan PanVK r8 for Mali/kbase (Android 12+), and Turnip for Qualcomm KGSL.
+    // Keep stock Vulkan, JimVulkan PanVK r9 for Mali/kbase (Android 12+), and Turnip for Qualcomm KGSL.
     private static final String[] DRIVER_STATES = {"system", "panvk", "turnip"};
     private static final String TURNIP_ASSET = "turnip/vulkan.purple.so";
     private static final String PANVK_ASSET = "panvk/libvulkan_panfrost.so";
@@ -345,11 +345,11 @@ public final class LauncherActivity extends Activity {
             }
             return null;
         }
-        if (selected.equals("panvk")) return text("dmAndroidLaunchPanvkWsiMissing");
         String profile = readProfileSize();
         if (profile == null) return "host-subgroup-size.txt";
-        String libraryName = "vulkan.purple.so";
-        String asset = TURNIP_ASSET;
+        boolean panvk = selected.equals("panvk");
+        String libraryName = panvk ? "libvulkan_panfrost.so" : "vulkan.purple.so";
+        String asset = panvk ? PANVK_ASSET : TURNIP_ASSET;
         File directory = new File(temporary, "driver-" + selected);
         File library = new File(directory, libraryName);
         String copyProblem = copyDriverAsset(asset, library);
@@ -359,7 +359,7 @@ public final class LauncherActivity extends Activity {
         content.append("directory=").append(directory.getAbsolutePath()).append('\n');
         content.append("library=").append(libraryName).append('\n');
         content.append("require_custom=1\n");
-        content.append("subgroup_size=").append(profile).append('\n');
+        if (!panvk) content.append("subgroup_size=").append(profile).append('\n');
         return writeDriverConfiguration(configuration, content.toString());
     }
 
